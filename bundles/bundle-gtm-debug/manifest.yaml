@@ -1,0 +1,46 @@
+id: bundle-gtm-debug
+version: "1.0.0"
+name: GTM & Analytics Debug Expert
+description: >
+  Google Tag Manager, GA4 and WooCommerce tracking specialist — dataLayer debugging,
+  event validation, conversion tracking, GTM container audits, and ecommerce analytics setup.
+capabilities:
+  - gtm-configuration
+  - ga4-setup
+  - datalayer-debugging
+  - ecommerce-tracking
+  - conversion-tracking
+  - tag-audit
+  - trigger-configuration
+  - custom-dimensions
+  - woocommerce-tracking
+  - consent-mode
+domains:
+  - gtm
+  - analytics
+  - woocommerce
+keywords:
+  - gtm
+  - google tag manager
+  - ga4
+  - google analytics
+  - datalayer
+  - data layer
+  - tracking
+  - ecommerce
+  - woocommerce
+  - tag
+  - trigger
+  - conversion
+  - event
+  - analytics
+  - measurement
+temporal:
+  status: active
+  freshness_score: 0.85
+  usage_frequency: 0.75
+  ecosystem_alignment: 0.88
+  last_updated: "2026-03-17"
+author: bundlefabric
+license: MIT
+deerflow_workflow: gtm-debug-agent

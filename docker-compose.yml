@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  bundlefabric-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bundlefabric-api
+    image: bundlefabric-api:2.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:19100:8000"
+    environment:
+      - PYTHONPATH=/app
+      - BUNDLES_DIR=/app/bundles
+      - OLLAMA_URL=http://172.17.0.1:18630
+      - QDRANT_URL=http://172.17.0.1:18650
+      - DEERFLOW_URL=http://deer-flow-gateway:8001
+      - OLLAMA_MODEL=nemotron-mini:4b
+      - USE_OLLAMA=true
+      - OLLAMA_TIMEOUT=15
+    volumes:
+      - ./bundles:/app/bundles:rw
+      - ./secrets_vault:/app/secrets_vault:ro
+    networks:
+      - bundlefabric_net
+      - sylvea_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    profiles:
+      - phase2
+
+networks:
+  bundlefabric_net:
+    name: bundlefabric_net
+    driver: bridge
+  sylvea_net:
+    name: sylvea_net
+    external: true

@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BundleFabric — OS Cognitif</title>
+  <style>
+    :root {
+      --bg: #0d0d0f;
+      --bg2: #16161a;
+      --bg3: #1e1e24;
+      --border: #2a2a35;
+      --accent: #7c3aed;
+      --accent2: #a78bfa;
+      --accent3: #c4b5fd;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --blue: #3b82f6;
+      --text: #e2e2e8;
+      --text2: #9999aa;
+      --text3: #666677;
+      --radius: 10px;
+      --font: 'Inter', system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .logo { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
+    .logo-icon { width: 32px; height: 32px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+    .logo-text { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    .logo-version { font-size: 11px; color: var(--text3); background: var(--bg3); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
+    .header-right { display: flex; align-items: center; gap: 12px; }
+    .status-badge { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text2); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text3); }
+    .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.offline { background: var(--red); }
+
+    nav { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; gap: 0; }
+    .tab { padding: 12px 20px; font-size: 14px; font-weight: 500; color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; user-select: none; }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent2); border-bottom-color: var(--accent); }
+
+    main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .section { display: none; }
+    .section.active { display: block; }
+
+    .card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .card-title { font-size: 16px; font-weight: 600; }
+    .card-subtitle { font-size: 13px; color: var(--text2); margin-top: 2px; }
+
+    .intent-box { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; color: var(--text); font-family: var(--font); font-size: 15px; resize: vertical; min-height: 100px; transition: border-color 0.2s; outline: none; }
+    .intent-box:focus { border-color: var(--accent); }
+    .intent-box::placeholder { color: var(--text3); }
+    .btn { padding: 10px 20px; border-radius: 8px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 8px; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: #6d28d9; }
+    .btn-primary:disabled { background: var(--border); color: var(--text3); cursor: not-allowed; }
+    .btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { border-color: var(--accent2); color: var(--accent2); }
+    .btn-sm { padding: 6px 12px; font-size: 13px; }
+
+    .bundles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+    .bundle-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; transition: border-color 0.2s; cursor: pointer; }
+    .bundle-card:hover { border-color: var(--accent); }
+    .bundle-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .bundle-name { font-size: 15px; font-weight: 600; }
+    .bundle-id { font-size: 12px; color: var(--text3); font-family: monospace; }
+    .bundle-desc { font-size: 13px; color: var(--text2); line-height: 1.5; margin-bottom: 12px; }
+    .bundle-caps { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .cap-tag { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
+    .bundle-footer { display: flex; align-items: center; justify-content: space-between; }
+
+    .tps-badge { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+    .tps-bar { width: 60px; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .tps-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+    .tps-fill.high { background: var(--green); }
+    .tps-fill.med { background: var(--yellow); }
+    .tps-fill.low { background: var(--red); }
+
+    .status-pill { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px; }
+    .status-pill.active { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
+    .status-pill.stable { background: rgba(59,130,246,0.15); color: var(--blue); border: 1px solid rgba(59,130,246,0.3); }
+    .status-pill.legacy { background: rgba(245,158,11,0.15); color: var(--yellow); border: 1px solid rgba(245,158,11,0.3); }
+    .status-pill.archival { background: rgba(239,68,68,0.1); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
+    .status-pill.experimental { background: rgba(124,58,237,0.15); color: var(--accent2); border: 1px solid rgba(124,58,237,0.3); }
+
+    .intent-result { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 16px; }
+    .result-row { display: flex; gap: 10px; margin-bottom: 8px; font-size: 14px; }
+    .result-label { color: var(--text3); width: 110px; flex-shrink: 0; font-size: 13px; }
+    .result-value { color: var(--text); }
+    .match-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .match-info { flex: 1; }
+    .match-name { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .match-score { font-size: 13px; color: var(--text2); }
+    .score-num { font-weight: 700; color: var(--accent2); }
+
+    .form-group { margin-bottom: 16px; }
+    .form-label { display: block; font-size: 13px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
+    .form-input { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; color: var(--text); font-family: var(--font); font-size: 14px; outline: none; transition: border-color 0.2s; }
+    .form-input:focus { border-color: var(--accent); }
+    .form-hint { font-size: 12px; color: var(--text3); margin-top: 4px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .empty-state { text-align: center; padding: 48px 24px; color: var(--text3); }
+    .empty-icon { font-size: 40px; margin-bottom: 12px; }
+    .empty-title { font-size: 16px; font-weight: 600; color: var(--text2); margin-bottom: 6px; }
+
+    .toast { position: fixed; bottom: 24px; right: 24px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; font-size: 14px; z-index: 1000; transform: translateY(100px); opacity: 0; transition: all 0.3s; max-width: 360px; }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.success { border-left: 3px solid var(--green); }
+    .toast.error { border-left: 3px solid var(--red); }
+
+    .deerflow-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .deerflow-metric { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+    .metric-label { font-size: 12px; color: var(--text3); margin-bottom: 6px; }
+    .metric-value { font-size: 18px; font-weight: 700; }
+
+    .badge-beta { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: rgba(245,158,11,0.15); color: var(--yellow); border: 1px solid rgba(245,158,11,0.3); text-transform: uppercase; letter-spacing: 0.5px; }
+
+    @media (max-width: 640px) {
+      .form-row { grid-template-columns: 1fr; }
+      .bundles-grid { grid-template-columns: 1fr; }
+      nav { overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <a href="#" class="logo">
+    <div class="logo-icon">⬡</div>
+    <span class="logo-text">BundleFabric</span>
+    <span class="logo-version">v2.0</span>
+    <span class="badge-beta">bêta</span>
+  </a>
+  <div class="header-right">
+    <div class="status-badge">
+      <div class="status-dot" id="api-status-dot"></div>
+      <span id="api-status-text">Connexion…</span>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <div class="tab active" data-tab="orchestrate">⚡ Orchestrer</div>
+  <div class="tab" data-tab="bundles">📦 Bundles</div>
+  <div class="tab" data-tab="create">✦ Créer un bundle</div>
+  <div class="tab" data-tab="deerflow">🦌 DeerFlow</div>
+</nav>
+
+<main>
+
+  <!-- ONGLET ORCHESTRER -->
+  <div class="section active" id="tab-orchestrate">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Intention → Résolution de bundle</div>
+          <div class="card-subtitle">Décrivez en langage naturel ce que vous souhaitez accomplir</div>
+        </div>
+      </div>
+      <textarea class="intent-box" id="intent-text" placeholder="Ex : Je dois configurer un reverse proxy nginx avec SSL pour mon domaine sur Ubuntu…"></textarea>
+      <div style="display:flex; gap:10px; margin-top:12px; align-items:center;">
+        <button class="btn btn-primary" id="btn-resolve" onclick="doResolve()">
+          <span>🔍 Résoudre les bundles</span>
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="doIntent()">Extraire l'intention uniquement</button>
+        <label style="font-size:13px; color:var(--text2); margin-left:auto; display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <input type="checkbox" id="use-ollama" checked style="accent-color:var(--accent)"> Enrichissement Ollama
+        </label>
+      </div>
+    </div>
+
+    <div id="intent-result-zone"></div>
+    <div id="matches-zone"></div>
+  </div>
+
+  <!-- ONGLET BUNDLES -->
+  <div class="section" id="tab-bundles">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+      <div>
+        <h2 style="font-size:20px; font-weight:700;">Registre des bundles</h2>
+        <p style="font-size:14px; color:var(--text2); margin-top:4px;" id="bundle-count-text">Chargement…</p>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="loadBundles()">↺ Actualiser</button>
+    </div>
+    <div class="bundles-grid" id="bundles-grid">
+      <div class="empty-state"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- ONGLET CRÉER UN BUNDLE -->
+  <div class="section" id="tab-create">
+    <div class="card" style="max-width:680px;">
+      <div class="card-header">
+        <div>
+          <div class="card-title">✦ Fabrique — Créer un nouveau bundle</div>
+          <div class="card-subtitle">Génère la structure répertoire et le manifest.yaml d'un bundle cognitif</div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Identifiant du bundle *</label>
+          <input class="form-input" id="new-id" placeholder="bundle-mon-expert" />
+          <div class="form-hint">Format kebab-case, unique</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Version</label>
+          <input class="form-input" id="new-version" value="1.0.0" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Nom du bundle *</label>
+        <input class="form-input" id="new-name" placeholder="Mon Expert Bundle" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <textarea class="form-input" id="new-desc" rows="3" placeholder="À quoi sert ce bundle ?"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Capacités * <span style="color:var(--text3)">(séparées par des virgules)</span></label>
+        <input class="form-input" id="new-caps" placeholder="fonctionnalité-a, fonctionnalité-b, fonctionnalité-c" />
+        <div class="form-hint">Au moins une capacité requise</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Domaines <span style="color:var(--text3)">(séparés par des virgules)</span></label>
+          <input class="form-input" id="new-domains" placeholder="linux, devops" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Mots-clés <span style="color:var(--text3)">(séparés par des virgules)</span></label>
+          <input class="form-input" id="new-keywords" placeholder="bash, nginx, ssh" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Auteur</label>
+          <input class="form-input" id="new-author" value="bundlefabric" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Score de fraîcheur (0.0–1.0)</label>
+          <input class="form-input" id="new-freshness" type="number" min="0" max="1" step="0.05" value="0.8" />
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="createBundle()" style="width:100%; justify-content:center;">
+        ✦ Créer le bundle
+      </button>
+    </div>
+  </div>
+
+  <!-- ONGLET DEERFLOW -->
+  <div class="section" id="tab-deerflow">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+      <div>
+        <h2 style="font-size:20px; font-weight:700;">🦌 Moteur DeerFlow</h2>
+        <p style="font-size:14px; color:var(--text2); margin-top:4px;">État en temps réel du moteur d'exécution cognitif</p>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="loadDeerFlow()">↺ Actualiser</button>
+    </div>
+    <div class="card">
+      <div class="deerflow-panel" id="deerflow-panel">
+        <div class="empty-state"><div class="spinner"></div></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const API = 'https://api.bundlefabric.org';
+
+  let bundlesCache = [];
+
+  document.addEventListener('DOMContentLoaded', () => {
+    initTabs();
+    checkApiStatus();
+    setInterval(checkApiStatus, 30000);
+  });
+
+  function initTabs() {
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const name = tab.dataset.tab;
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + name).classList.add('active');
+        if (name === 'bundles') loadBundles();
+        if (name === 'deerflow') loadDeerFlow();
+      });
+    });
+  }
+
+  async function apiFetch(path, opts = {}) {
+    const r = await fetch(API + path, {
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      ...opts,
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status} : ${await r.text()}`);
+    return r.json();
+  }
+
+  async function checkApiStatus() {
+    try {
+      const data = await apiFetch('/health');
+      document.getElementById('api-status-dot').className = 'status-dot online';
+      document.getElementById('api-status-text').textContent = `API v${data.version} — en ligne`;
+    } catch {
+      document.getElementById('api-status-dot').className = 'status-dot offline';
+      document.getElementById('api-status-text').textContent = 'API hors ligne';
+    }
+  }
+
+  let toastTimer;
+  function showToast(msg, type = 'success') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `toast ${type} show`;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+  }
+
+  function tpsClass(score) {
+    if (score >= 0.7) return 'high';
+    if (score >= 0.4) return 'med';
+    return 'low';
+  }
+  function tpsColor(score) {
+    if (score >= 0.7) return 'var(--green)';
+    if (score >= 0.4) return 'var(--yellow)';
+    return 'var(--red)';
+  }
+
+  async function doIntent() {
+    const text = document.getElementById('intent-text').value.trim();
+    if (!text) { showToast('Veuillez saisir une intention', 'error'); return; }
+    const btn = document.getElementById('btn-resolve');
+    const useOllama = document.getElementById('use-ollama').checked;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Extraction…';
+    document.getElementById('intent-result-zone').innerHTML = '';
+    document.getElementById('matches-zone').innerHTML = '';
+    try {
+      const intent = await apiFetch('/intent', {
+        method: 'POST',
+        body: JSON.stringify({ text, use_ollama: useOllama }),
+      });
+      renderIntentResult(intent);
+    } catch (e) {
+      showToast('Erreur : ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<span>🔍 Résoudre les bundles</span>';
+    }
+  }
+
+  async function doResolve() {
+    const text = document.getElementById('intent-text').value.trim();
+    if (!text) { showToast('Veuillez saisir une intention', 'error'); return; }
+    const btn = document.getElementById('btn-resolve');
+    const useOllama = document.getElementById('use-ollama').checked;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Résolution…';
+    document.getElementById('intent-result-zone').innerHTML = '';
+    document.getElementById('matches-zone').innerHTML = '';
+    try {
+      const intent = await apiFetch('/intent', {
+        method: 'POST',
+        body: JSON.stringify({ text, use_ollama: useOllama }),
+      });
+      renderIntentResult(intent);
+      const result = await apiFetch('/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ intent, top_k: 5 }),
+      });
+      renderMatches(result);
+    } catch (e) {
+      showToast('Erreur : ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<span>🔍 Résoudre les bundles</span>';
+    }
+  }
+
+  function renderIntentResult(intent) {
+    const complexityLabels = { simple: 'Simple', medium: 'Moyenne', complex: 'Complexe' };
+    const methodLabels = { keyword: 'mots-clés', ollama: 'Ollama IA' };
+    document.getElementById('intent-result-zone').innerHTML = `
+      <div class="intent-result">
+        <div style="font-size:13px; font-weight:600; color:var(--accent2); margin-bottom:10px;">
+          ⚡ Intention extraite (${methodLabels[intent.extraction_method] || intent.extraction_method}) — confiance ${Math.round((intent.confidence||0)*100)}%
+        </div>
+        <div class="result-row"><span class="result-label">Objectif</span><span class="result-value">${esc(intent.goal)}</span></div>
+        <div class="result-row"><span class="result-label">Domaines</span><span class="result-value">${(intent.domains||[]).join(', ') || '—'}</span></div>
+        <div class="result-row"><span class="result-label">Mots-clés</span><span class="result-value">${(intent.keywords||[]).join(', ') || '—'}</span></div>
+        <div class="result-row"><span class="result-label">Complexité</span><span class="result-value">${complexityLabels[intent.complexity] || intent.complexity}</span></div>
+      </div>`;
+  }
+
+  function renderMatches(result) {
+    const z = document.getElementById('matches-zone');
+    if (!result.matches || result.matches.length === 0) {
+      z.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">Aucun bundle correspondant</div><p>Essayez d\'autres mots-clés ou créez un nouveau bundle pour ce domaine.</p></div>';
+      return;
+    }
+    const cards = result.matches.map(m => `
+      <div class="match-card">
+        <div class="match-info">
+          <div class="match-name">${esc(m.bundle_name || m.bundle_id)}</div>
+          <div class="match-score">Score : <span class="score-num">${Math.round(m.score*100)}%</span> · TPS : <span style="color:${tpsColor(m.tps_score)}">${Math.round(m.tps_score*100)}%</span> · Correspondances : ${(m.matched_keywords||[]).slice(0,4).join(', ') || '—'}</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="executeBundle('${m.bundle_id}')">▶ Exécuter</button>
+      </div>`).join('');
+    z.innerHTML = `<div class="card"><div class="card-header"><div class="card-title">📦 ${result.matches_count} bundle${result.matches_count !== 1 ? 's' : ''} correspondant${result.matches_count !== 1 ? 's' : ''}</div></div>${cards}</div>`;
+  }
+
+  async function executeBundle(bundleId) {
+    const text = document.getElementById('intent-text').value.trim();
+    if (!text) { showToast('Intention requise', 'error'); return; }
+    showToast(`Exécution de ${bundleId} via DeerFlow…`);
+    try {
+      const result = await apiFetch('/execute', {
+        method: 'POST',
+        body: JSON.stringify({ bundle_id: bundleId, intent_text: text }),
+      });
+      showToast(result.status === 'success' ? `✓ Exécuté : ${bundleId}` : `⚠ ${result.error_message}`, result.status === 'success' ? 'success' : 'error');
+    } catch (e) {
+      showToast('Erreur d\'exécution : ' + e.message, 'error');
+    }
+  }
+
+  async function loadBundles() {
+    const grid = document.getElementById('bundles-grid');
+    grid.innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
+    try {
+      const data = await apiFetch('/bundles');
+      bundlesCache = data.bundles || [];
+      document.getElementById('bundle-count-text').textContent =
+        `${data.count} bundle${data.count !== 1 ? 's' : ''} dans le registre`;
+      if (bundlesCache.length === 0) {
+        grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">Aucun bundle disponible</div><p>Créez votre premier bundle dans l\'onglet Créer.</p></div>';
+        return;
+      }
+      grid.innerHTML = bundlesCache.map(renderBundleCard).join('');
+    } catch (e) {
+      grid.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Échec du chargement</div><p>${esc(e.message)}</p></div>`;
+    }
+  }
+
+  function renderBundleCard(b) {
+    const tps = b.tps_score || 0;
+    const statusLabels = { active: 'actif', stable: 'stable', legacy: 'déprécié', archival: 'archivé', experimental: 'expérimental' };
+    const caps = (b.capabilities || []).slice(0, 5);
+    return `
+      <div class="bundle-card">
+        <div class="bundle-card-header">
+          <div>
+            <div class="bundle-name">${esc(b.name)}</div>
+            <div class="bundle-id">${esc(b.id)} · v${esc(b.version||'?')}</div>
+          </div>
+          <span class="status-pill ${b.status||'active'}">${statusLabels[b.status] || b.status || 'actif'}</span>
+        </div>
+        <div class="bundle-desc">${esc(b.description||'').slice(0,120)}${(b.description||'').length > 120 ? '…' : ''}</div>
+        <div class="bundle-caps">${caps.map(c => `<span class="cap-tag">${esc(c)}</span>`).join('')}${b.capabilities.length > 5 ? `<span class="cap-tag">+${b.capabilities.length-5}</span>` : ''}</div>
+        <div class="bundle-footer">
+          <div class="tps-badge">
+            <span style="color:${tpsColor(tps)}">TPS ${Math.round(tps*100)}%</span>
+            <div class="tps-bar"><div class="tps-fill ${tpsClass(tps)}" style="width:${Math.round(tps*100)}%"></div></div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  async function createBundle() {
+    const id = document.getElementById('new-id').value.trim();
+    const name = document.getElementById('new-name').value.trim();
+    const capsRaw = document.getElementById('new-caps').value.trim();
+    if (!id || !name || !capsRaw) {
+      showToast('Identifiant, nom et capacités sont obligatoires', 'error');
+      return;
+    }
+    const capabilities = capsRaw.split(',').map(s => s.trim()).filter(Boolean);
+    const domains = document.getElementById('new-domains').value.split(',').map(s => s.trim()).filter(Boolean);
+    const keywords = document.getElementById('new-keywords').value.split(',').map(s => s.trim()).filter(Boolean);
+    const payload = {
+      id,
+      name,
+      description: document.getElementById('new-desc').value.trim(),
+      capabilities,
+      domains,
+      keywords,
+      version: document.getElementById('new-version').value.trim() || '1.0.0',
+      author: document.getElementById('new-author').value.trim() || 'bundlefabric',
+      freshness_score: parseFloat(document.getElementById('new-freshness').value) || 0.8,
+    };
+    try {
+      await apiFetch('/bundles/create', { method: 'POST', body: JSON.stringify(payload) });
+      showToast(`✓ Bundle "${name}" créé avec succès !`);
+      document.getElementById('new-id').value = '';
+      document.getElementById('new-name').value = '';
+      document.getElementById('new-desc').value = '';
+      document.getElementById('new-caps').value = '';
+      document.getElementById('new-domains').value = '';
+      document.getElementById('new-keywords').value = '';
+    } catch (e) {
+      showToast('Erreur lors de la création : ' + e.message, 'error');
+    }
+  }
+
+  async function loadDeerFlow() {
+    const panel = document.getElementById('deerflow-panel');
+    panel.innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
+    try {
+      const [status, apiStatus] = await Promise.all([
+        apiFetch('/deerflow/status'),
+        apiFetch('/status'),
+      ]);
+      const isOnline = status.status === 'online';
+      const statusLabels = { online: 'en ligne', offline: 'hors ligne', degraded: 'dégradé', error: 'erreur' };
+      panel.innerHTML = `
+        <div class="deerflow-metric">
+          <div class="metric-label">Moteur DeerFlow</div>
+          <div class="metric-value" style="color:${isOnline ? 'var(--green)' : 'var(--red)'}">
+            ${statusLabels[status.status] || status.status}
+          </div>
+        </div>
+        <div class="deerflow-metric">
+          <div class="metric-label">URL passerelle</div>
+          <div class="metric-value" style="font-size:13px; font-family:monospace">${esc(status.url||'—')}</div>
+        </div>
+        <div class="deerflow-metric">
+          <div class="metric-label">Bundles chargés</div>
+          <div class="metric-value">${apiStatus.bundles_loaded ?? '—'}</div>
+        </div>
+        <div class="deerflow-metric">
+          <div class="metric-label">Qdrant (RAG)</div>
+          <div class="metric-value" style="color:${apiStatus.qdrant_available ? 'var(--green)' : 'var(--text3)'}">
+            ${apiStatus.qdrant_available ? 'en ligne' : 'hors ligne'}
+          </div>
+        </div>
+        <div class="deerflow-metric">
+          <div class="metric-label">URL Ollama</div>
+          <div class="metric-value" style="font-size:13px; font-family:monospace">${esc(apiStatus.ollama_url||'—')}</div>
+        </div>
+        <div class="deerflow-metric">
+          <div class="metric-label">Disponibilité API</div>
+          <div class="metric-value">${formatUptime(apiStatus.uptime_seconds||0)}</div>
+        </div>`;
+    } catch (e) {
+      panel.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Impossible de contacter l'API</div><p>${esc(e.message)}</p></div>`;
+    }
+  }
+
+  function formatUptime(s) {
+    if (s < 60) return `${Math.round(s)}s`;
+    if (s < 3600) return `${Math.round(s/60)} min`;
+    return `${Math.round(s/3600)}h ${Math.round((s%3600)/60)}min`;
+  }
+
+  function esc(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>
