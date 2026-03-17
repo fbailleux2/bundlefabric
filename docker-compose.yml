@@ -16,7 +16,7 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - QDRANT_URL=http://qdrant:6333
       - DEERFLOW_URL=http://deer-flow-gateway:8001
-      - OLLAMA_MODEL=nemotron-mini:4b
+      - OLLAMA_MODEL=qwen2.5:1.5b
       - USE_OLLAMA=false
       - OLLAMA_TIMEOUT=15
     volumes:
