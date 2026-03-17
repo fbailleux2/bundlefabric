@@ -224,7 +224,7 @@ async def _index_single_bundle(bundle: BundleManifest) -> None:
 @app.post("/intent", tags=["Orchestration"])
 async def extract_intent(req: IntentRequest):
     """Extract structured intent from free text."""
-    intent = await intent_engine.extract(req.text)
+    intent = await intent_engine.extract(req.text, use_ollama=req.use_ollama)
     return intent.model_dump()
 
 

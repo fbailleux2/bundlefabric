@@ -17,8 +17,8 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - DEERFLOW_URL=http://deer-flow-gateway:8001
       - OLLAMA_MODEL=qwen2.5:1.5b
-      - USE_OLLAMA=false
-      - OLLAMA_TIMEOUT=15
+      - USE_OLLAMA=true
+      - OLLAMA_TIMEOUT=90
     volumes:
       - ./bundles:/app/bundles:rw
       - ./secrets_vault:/app/secrets_vault:ro

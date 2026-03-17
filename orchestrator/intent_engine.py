@@ -155,8 +155,8 @@ class IntentEngine:
     def __init__(self, use_ollama: bool = True):
         self.use_ollama = use_ollama
 
-    async def extract(self, text: str) -> Intent:
-        return await extract(text, use_ollama=self.use_ollama)
+    async def extract(self, text: str, use_ollama: bool = None) -> Intent:
+        return await extract(text, use_ollama=use_ollama if use_ollama is not None else self.use_ollama)
 
     def extract_sync(self, text: str) -> Intent:
         """Synchronous version for testing."""
