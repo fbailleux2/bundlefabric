@@ -1,8 +1,10 @@
 """BundleFabric Orchestrator — FastAPI main application."""
 from __future__ import annotations
+import asyncio
 import os
 import sys
 import time
+from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any
 
 sys.path.insert(0, "/opt/bundlefabric")
@@ -24,12 +26,66 @@ from memory.rag_manager import RAGManager
 VERSION = "2.0.0"
 START_TIME = time.time()
 
+# ── Singletons ──────────────────────────────────────────────────────────────
+loader = BundleLoader()
+builder = BundleBuilder()
+evaluator = BundleEvaluator()
+intent_engine = IntentEngine(use_ollama=os.getenv("USE_OLLAMA", "true").lower() == "true")
+resolver = BundleResolver(loader=loader)
+deerflow = DeerFlowClient()
+rag = RAGManager()
+
+# Track RAG indexing state
+_rag_indexed_count: int = 0
+_rag_total_count: int = 0
+
+
+async def _startup_index_bundles() -> None:
+    """Background task: index all bundles into Qdrant at startup."""
+    global _rag_indexed_count, _rag_total_count
+    # Brief delay to let services stabilize
+    await asyncio.sleep(2)
+    try:
+        bundles = loader.list_bundles()
+        _rag_total_count = len(bundles)
+        if not bundles:
+            print("[RAG] No bundles to index.")
+            return
+
+        rag.ensure_collection()
+        indexed = 0
+        for bundle in bundles:
+            try:
+                success = rag.index_bundle(bundle)
+                if success:
+                    indexed += 1
+            except Exception as e:
+                print(f"[RAG] Failed to index {bundle.id}: {e}")
+        _rag_indexed_count = indexed
+        print(f"[RAG] Indexed {indexed}/{len(bundles)} bundles into Qdrant.")
+    except Exception as e:
+        print(f"[RAG] Startup indexing error (non-fatal): {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan — startup indexing + shutdown cleanup."""
+    # Startup: launch RAG indexing as background task (non-blocking)
+    task = asyncio.create_task(_startup_index_bundles())
+    print(f"[Startup] BundleFabric API v{VERSION} starting...")
+    yield
+    # Shutdown
+    task.cancel()
+    print("[Shutdown] BundleFabric API stopped.")
+
+
 app = FastAPI(
     title="BundleFabric API",
     description="Cognitive OS Orchestrator — intent → bundle → DeerFlow",
     version=VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS — allow bundlefabric.org domains + localhost for dev
@@ -47,15 +103,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Singletons
-loader = BundleLoader()
-builder = BundleBuilder()
-evaluator = BundleEvaluator()
-intent_engine = IntentEngine(use_ollama=os.getenv("USE_OLLAMA", "true").lower() == "true")
-resolver = BundleResolver(loader=loader)
-deerflow = DeerFlowClient()
-rag = RAGManager()
 
 
 # ── Request/Response models ─────────────────────────────────────────────────
@@ -112,7 +159,9 @@ async def status():
         "bundles_loaded": bundle_count,
         "deerflow": deerflow_status,
         "qdrant_available": rag.is_available,
-        "ollama_url": os.getenv("OLLAMA_URL", "http://127.0.0.1:18630"),
+        "qdrant_indexed_count": _rag_indexed_count,
+        "qdrant_total_bundles": _rag_total_count,
+        "ollama_url": os.getenv("OLLAMA_URL", "http://ollama:11434"),
     }
 
 
@@ -153,9 +202,23 @@ async def create_bundle(req: CreateBundleRequest):
             author=req.author,
             freshness_score=req.freshness_score,
         )
+        # Index the new bundle in Qdrant
+        asyncio.create_task(_index_single_bundle(manifest))
         return {"status": "created", "bundle": manifest.to_summary()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _index_single_bundle(bundle: BundleManifest) -> None:
+    """Background task to index a newly created bundle."""
+    global _rag_indexed_count, _rag_total_count
+    try:
+        rag.ensure_collection()
+        if rag.index_bundle(bundle):
+            _rag_indexed_count += 1
+            _rag_total_count += 1
+    except Exception as e:
+        print(f"[RAG] Failed to index new bundle {bundle.id}: {e}")
 
 
 @app.post("/intent", tags=["Orchestration"])
@@ -187,7 +250,7 @@ async def resolve_bundles(req: ResolveRequest):
 
 @app.post("/execute", tags=["Orchestration"])
 async def execute_bundle(req: ExecuteRequest):
-    """Execute a bundle via DeerFlow engine."""
+    """Execute a bundle via DeerFlow engine with full bundle context injection."""
     try:
         bundle = loader.load_bundle(req.bundle_id)
     except BundleNotFoundError:
@@ -198,6 +261,7 @@ async def execute_bundle(req: ExecuteRequest):
         bundle_id=req.bundle_id,
         intent=intent,
         workflow_id=req.workflow_id or bundle.deerflow_workflow,
+        bundle=bundle,  # Full bundle for system prompt injection
     )
     return result.model_dump()
 
