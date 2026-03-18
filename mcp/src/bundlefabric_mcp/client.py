@@ -1,6 +1,7 @@
 """BundleFabric MCP — Async HTTP client wrapping the BundleFabric REST API."""
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
+import json
 import httpx
 from .auth import AuthManager
 
@@ -53,11 +54,12 @@ class BundleFabricClient:
 
     # ── Intent / Resolve endpoints ────────────────────────────────────────────
 
-    async def extract_intent(self, text: str) -> Dict[str, Any]:
+    async def extract_intent(self, text: str,
+                             use_ollama: bool = False) -> Dict[str, Any]:
         """POST /intent — extract goal, keywords, domains from natural language."""
         return await self._post("/intent", {
             "text": text,
-            "use_ollama": False,   # fast keyword extraction for MCP tool calls
+            "use_ollama": use_ollama,
             "use_claude": False,
         })
 
@@ -80,12 +82,77 @@ class BundleFabricClient:
             body["workflow_id"] = workflow_id
         return await self._post("/execute", body, timeout=self._execute_timeout)
 
+    async def stream_execute(
+        self, bundle_id: str, intent_text: str
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """POST /execute/deerflow/stream — stream tokens via SSE.
+
+        Yields parsed JSON dicts for each SSE data line.
+        Event types: token, status, warning, summary, error.
+        """
+        headers = await self._auth.auth_headers()
+        body = {"bundle_id": bundle_id, "intent_text": intent_text}
+        timeout = httpx.Timeout(self._execute_timeout, connect=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
+                "POST", f"{self._base}/execute/deerflow/stream",
+                headers=headers, json=body,
+            ) as response:
+                response.raise_for_status()
+                pending_error = False
+                async for line in response.aiter_lines():
+                    if not line:
+                        pending_error = False
+                        continue
+                    if line.startswith("event:"):
+                        event_type = line[len("event:"):].strip()
+                        if event_type == "error":
+                            pending_error = True
+                        continue
+                    if line.startswith("data:"):
+                        raw = line[len("data:"):].strip()
+                        try:
+                            data = json.loads(raw)
+                        except json.JSONDecodeError:
+                            data = {"type": "raw", "content": raw}
+                        if pending_error:
+                            data["_sse_error"] = True
+                            pending_error = False
+                        yield data
+
     async def dry_run(self, bundle_id: str, intent_text: str) -> Dict[str, Any]:
         """POST /execute/dry-run — resolve intent without calling DeerFlow."""
         return await self._post("/execute/dry-run", {
             "bundle_id": bundle_id,
             "intent_text": intent_text,
         })
+
+    async def create_bundle(
+        self,
+        bundle_id: str,
+        name: str,
+        description: str,
+        capabilities: List[str],
+        version: str = "1.0.0",
+        domains: Optional[List[str]] = None,
+        keywords: Optional[List[str]] = None,
+        author: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """POST /bundles/create — create a new bundle manifest."""
+        body: Dict[str, Any] = {
+            "id": bundle_id,
+            "name": name,
+            "description": description,
+            "capabilities": capabilities,
+            "version": version,
+        }
+        if domains is not None:
+            body["domains"] = domains
+        if keywords is not None:
+            body["keywords"] = keywords
+        if author is not None:
+            body["author"] = author
+        return await self._post("/bundles/create", body)
 
     # ── History endpoints ─────────────────────────────────────────────────────
 

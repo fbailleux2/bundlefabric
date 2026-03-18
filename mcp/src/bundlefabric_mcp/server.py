@@ -1,13 +1,15 @@
 """BundleFabric MCP Server — Phase 3 (tools + resources + prompts + dynamic bundles).
 
-Static tools (7):
-  - list_bundles         : discover available AI bundles
-  - get_bundle           : full manifest for a specific bundle
-  - execute_bundle       : run a bundle against an intent (calls DeerFlow)
-  - system_status        : aggregated health: API + DeerFlow + Ollama
-  - resolve_intent       : find best bundle(s) for a natural-language intent
-  - get_history          : execution history (optional bundle filter)
-  - get_execution        : detail of a single execution by id
+Static tools (9):
+  - list_bundles            : discover available AI bundles
+  - get_bundle              : full manifest for a specific bundle
+  - execute_bundle          : run a bundle against an intent (calls DeerFlow)
+  - execute_bundle_stream   : streaming token execution via MCP progress events
+  - create_bundle           : create a new bundle via POST /bundles/create
+  - system_status           : aggregated health: API + DeerFlow + Ollama
+  - resolve_intent          : find best bundle(s) for a natural-language intent (opt. Ollama)
+  - get_history             : execution history (optional bundle filter)
+  - get_execution           : detail of a single execution by id
 
 Dynamic tools (1 per bundle, registered at startup via lifespan):
   - {bundle_id_snake}    : e.g. bundle_linux_ops, bundle_gtm_debug
@@ -31,7 +33,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 
 from .config import settings
 from .auth import AuthManager
@@ -163,6 +165,7 @@ async def get_bundle(bundle_id: str) -> Dict[str, Any]:
 async def resolve_intent(
     intent_text: str,
     top_k: int = 3,
+    use_ollama: bool = False,
 ) -> Dict[str, Any]:
     """Find the best BundleFabric bundle(s) for a natural-language intent.
 
@@ -172,9 +175,10 @@ async def resolve_intent(
     Args:
         intent_text: Natural-language description of what you need.
         top_k:       Number of bundle matches to return (default: 3).
+        use_ollama:  Use Ollama LLM for richer intent extraction (slower, default: False).
     """
     client = await _get_client()
-    intent = await client.extract_intent(intent_text)
+    intent = await client.extract_intent(intent_text, use_ollama=use_ollama)
     matches = await client.resolve_intent(intent, top_k=top_k)
     return {
         "intent_goal": intent.get("goal"),
@@ -268,6 +272,106 @@ async def system_status() -> Dict[str, Any]:
         except Exception as exc:
             results[label] = {"error": str(exc)}
     return results
+
+
+@mcp.tool()
+async def execute_bundle_stream(
+    bundle_id: str,
+    intent_text: str,
+    ctx: Context,
+) -> str:
+    """Execute a bundle with streaming token output via MCP progress notifications.
+
+    Like execute_bundle, but streams tokens in real-time using MCP progress events.
+    Each token is reported via ctx.report_progress — the MCP client can display
+    the AI's response as it is generated rather than waiting for completion.
+
+    Args:
+        bundle_id:   Bundle to execute (e.g. 'bundle-linux-ops').
+        intent_text: Natural-language description of what you want to achieve.
+
+    Returns the full concatenated output as a string when streaming is complete.
+    """
+    client = await _get_client()
+    full_output: list[str] = []
+    token_count = 0
+
+    async for event in client.stream_execute(bundle_id, intent_text):
+        event_type = event.get("type", "unknown")
+
+        if event_type == "token":
+            content = event.get("content", "")
+            if content:
+                full_output.append(content)
+                token_count += 1
+                await ctx.report_progress(token_count, None, content)
+
+        elif event_type == "status":
+            msg = event.get("msg", "")
+            if msg:
+                await ctx.info(msg)
+
+        elif event_type == "warning":
+            msg = event.get("msg", "")
+            if msg:
+                await ctx.warning(msg)
+
+        elif event_type == "summary":
+            engine = event.get("engine", "unknown")
+            ms = event.get("duration_ms", 0)
+            await ctx.info(f"✓ {engine} — {ms}ms")
+
+        elif event.get("_sse_error") or event_type == "error":
+            error_msg = event.get("message", event.get("msg", str(event)))
+            await ctx.error(f"Stream error: {error_msg}")
+            return f"[ERROR] {error_msg}"
+
+    return "".join(full_output) or "[No output received]"
+
+
+@mcp.tool()
+async def create_bundle(
+    bundle_id: str,
+    name: str,
+    description: str,
+    capabilities: List[str],
+    version: str = "1.0.0",
+    domains: Optional[List[str]] = None,
+    keywords: Optional[List[str]] = None,
+    author: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a new BundleFabric bundle via the REST API.
+
+    Registers a new cognitive bundle with its capabilities and metadata.
+    The bundle becomes immediately available for execute_bundle calls.
+
+    Args:
+        bundle_id:    Unique identifier (kebab-case, e.g. 'my-new-bundle').
+        name:         Human-readable display name.
+        description:  Short description of what the bundle does.
+        capabilities: List of capability strings (e.g. ['bash', 'python', 'git']).
+        version:      Semantic version string (default: '1.0.0').
+        domains:      Optional list of domain tags (e.g. ['devops', 'linux']).
+        keywords:     Optional list of keywords for RAG indexing.
+        author:       Optional author name or identifier.
+
+    Returns the created bundle manifest or a clear error message.
+    """
+    client = await _get_client()
+    try:
+        result = await client.create_bundle(
+            bundle_id=bundle_id,
+            name=name,
+            description=description,
+            capabilities=capabilities,
+            version=version,
+            domains=domains,
+            keywords=keywords,
+            author=author,
+        )
+        return result
+    except Exception as exc:
+        return {"error": str(exc), "bundle_id": bundle_id}
 
 
 # ── Resources ─────────────────────────────────────────────────────────────────
