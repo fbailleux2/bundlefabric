@@ -84,3 +84,39 @@ async def get_execution(exec_id: int) -> Optional[Dict[str, Any]]:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+async def search_history(q: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """Full-text search on intent_text and goal fields."""
+    pattern = f"%{q}%"
+    async with aiosqlite.connect(HISTORY_DB) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM executions WHERE intent_text LIKE ? OR goal LIKE ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (pattern, pattern, min(limit, 200)),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def get_bundle_stats(bundle_id: str) -> Dict[str, Any]:
+    """Return usage_count, last_executed timestamp, and success_rate for a bundle."""
+    async with aiosqlite.connect(HISTORY_DB) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT COUNT(*) as total, MAX(created_at) as last_executed, "
+            "SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as successes "
+            "FROM executions WHERE bundle_id=?",
+            (bundle_id,),
+        )
+        row = await cursor.fetchone()
+        total = row["total"] or 0
+        last_executed = row["last_executed"]
+        successes = row["successes"] or 0
+        success_rate = round(successes / total, 4) if total > 0 else None
+        return {
+            "usage_count": total,
+            "last_executed": last_executed,
+            "success_rate": success_rate,
+        }

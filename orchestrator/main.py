@@ -23,7 +23,7 @@ from orchestrator.intent_engine import IntentEngine, _claude_available, claude_e
 from orchestrator.bundle_resolver import BundleResolver
 from orchestrator.deerflow_client import DeerFlowClient
 from memory.rag_manager import RAGManager
-from memory.history_manager import init_db, record_execution, get_history, get_execution
+from memory.history_manager import init_db, record_execution, get_history, get_execution, search_history, get_bundle_stats
 from auth.jwt_auth import require_auth, require_admin, create_token, list_users, create_user, delete_user, rotate_jwt_secret
 
 
@@ -155,6 +155,11 @@ class ExecuteRequest(BaseModel):
     bundle_id: str
     intent_text: str
     workflow_id: Optional[str] = None
+
+
+class DryRunRequest(BaseModel):
+    bundle_id: str
+    intent_text: str
 
 
 class CreateBundleRequest(BaseModel):
@@ -627,6 +632,38 @@ async def get_bundle(bundle_id: str):
         raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
 
 
+@app.get("/bundles/{bundle_id}/capabilities", tags=["Bundles"])
+async def get_bundle_capabilities(bundle_id: str):
+    """Return lightweight capabilities, keywords and domains for a bundle. Public."""
+    try:
+        bundle = loader.load_bundle(bundle_id)
+    except BundleNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
+    return {
+        "bundle_id": bundle_id,
+        "name": bundle.name,
+        "capabilities": bundle.capabilities,
+        "keywords": bundle.keywords,
+        "domains": bundle.domains,
+    }
+
+
+@app.get("/bundles/{bundle_id}/stats", tags=["Bundles"])
+async def get_bundle_stats_endpoint(bundle_id: str):
+    """Return execution statistics for a bundle (usage_count, last_executed, success_rate). Public."""
+    try:
+        bundle = loader.load_bundle(bundle_id)
+    except BundleNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
+    stats = await get_bundle_stats(bundle_id)
+    return {
+        "bundle_id": bundle_id,
+        "name": bundle.name,
+        "tps_score": bundle.temporal.tps_score,
+        **stats,
+    }
+
+
 @app.post("/bundles/create", tags=["Bundles"])
 async def create_bundle(req: CreateBundleRequest, _auth=Depends(require_auth)):
     if loader.bundle_exists(req.id):
@@ -696,6 +733,25 @@ async def resolve_bundles(req: ResolveRequest):
     matches = resolver.find_matches(intent, top_k=req.top_k, filter_archival=req.filter_archival)
     return {"intent_goal": intent.goal, "matches_count": len(matches),
             "matches": [m.model_dump() for m in matches]}
+
+
+@app.post("/execute/dry-run", tags=["Orchestration"])
+async def execute_dry_run(req: DryRunRequest):
+    """Resolve intent and generate system prompt WITHOUT calling DeerFlow. Public."""
+    try:
+        bundle = loader.load_bundle(req.bundle_id)
+    except BundleNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Bundle '{req.bundle_id}' not found")
+    intent = await intent_engine.extract(req.intent_text)
+    from orchestrator.deerflow_client import _build_system_prompt
+    system_prompt = _build_system_prompt(bundle)
+    return {
+        "bundle_id": req.bundle_id,
+        "intent_text": req.intent_text,
+        "goal": intent.goal,
+        "system_prompt": system_prompt,
+        "dry_run": True,
+    }
 
 
 @app.post("/execute", tags=["Orchestration"])
@@ -915,6 +971,15 @@ async def list_history(bundle_id: Optional[str] = None, limit: int = 50):
     """Return execution history (public, read-only)."""
     rows = await get_history(bundle_id=bundle_id, limit=min(limit, 200))
     return {"count": len(rows), "executions": rows}
+
+
+@app.get("/history/search", tags=["History"])
+async def search_history_endpoint(q: str, limit: int = 50):
+    """Full-text search on intent_text and goal. Must be defined before /history/{exec_id}."""
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(status_code=422, detail="Query 'q' must be at least 2 characters")
+    rows = await search_history(q.strip(), limit=min(limit, 200))
+    return {"query": q, "count": len(rows), "executions": rows}
 
 
 @app.get("/history/{exec_id}", tags=["History"])
