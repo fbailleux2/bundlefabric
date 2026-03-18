@@ -23,6 +23,7 @@ class TemporalScore(BaseModel):
     ecosystem_alignment: float = Field(0.5, ge=0.0, le=1.0,
                                        description="Alignment with current ecosystem trends")
     last_updated: Optional[str] = None  # ISO date string
+    usage_count: int = Field(0, ge=0, description="Cumulative execution count for this bundle")
 
     @property
     def tps_score(self) -> float:
@@ -75,4 +76,5 @@ class BundleManifest(BaseModel):
             "status": self.temporal.status.value,
             "capabilities": self.capabilities,
             "description": self.description,
+            "usage_count": self.temporal.usage_count,
         }

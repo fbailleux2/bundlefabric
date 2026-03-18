@@ -1,48 +1,47 @@
-id: bundle-linux-ops
-version: "1.0.0"
-name: Linux Operations Expert
-description: >
-  Comprehensive Linux system administration expert — bash scripting, system management,
-  process supervision, nginx, Docker, SSH hardening, cron jobs, and DevOps tooling.
-capabilities:
-  - bash-scripting
-  - linux-sysadmin
-  - process-management
-  - nginx-configuration
-  - docker-operations
-  - ssh-hardening
-  - cron-scheduling
-  - log-analysis
-  - performance-tuning
-  - network-debugging
-domains:
-  - linux
-  - devops
-  - docker
-  - nginx
-keywords:
-  - bash
-  - shell
-  - linux
-  - ubuntu
-  - debian
-  - nginx
-  - docker
-  - systemd
-  - ssh
-  - cron
-  - iptables
-  - grep
-  - awk
-  - sed
-  - chmod
-  - process
-temporal:
-  status: active
-  freshness_score: 0.9
-  usage_frequency: 0.85
-  ecosystem_alignment: 0.9
-  last_updated: "2026-03-17"
 author: bundlefabric
-license: MIT
+capabilities:
+- bash-scripting
+- linux-sysadmin
+- process-management
+- nginx-configuration
+- docker-operations
+- ssh-hardening
+- cron-scheduling
+- log-analysis
+- performance-tuning
+- network-debugging
 deerflow_workflow: linux-ops-agent
+description: Expert Linux / nginx / Docker — test PUT
+domains:
+- linux
+- devops
+- docker
+- nginx
+id: bundle-linux-ops
+keywords:
+- bash
+- shell
+- linux
+- ubuntu
+- debian
+- nginx
+- docker
+- systemd
+- ssh
+- cron
+- iptables
+- grep
+- awk
+- sed
+- chmod
+- process
+license: MIT
+name: Linux Operations Expert
+temporal:
+  ecosystem_alignment: 0.9
+  freshness_score: 0.9
+  last_updated: '2026-03-17'
+  status: active
+  usage_count: 7
+  usage_frequency: 0.4506
+version: 1.0.0
