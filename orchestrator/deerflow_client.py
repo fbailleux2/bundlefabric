@@ -225,7 +225,7 @@ class DeerFlowClient:
                         "assistant_id": self.assistant_id,
                         "input": {"messages": messages},
                         "context": {"thread_id": thread_id},
-                        "config": {"recursion_limit": 10},
+                        "config": {"recursion_limit": 25},
                     },
                 )
 
@@ -341,7 +341,7 @@ class DeerFlowClient:
                     "input": {"messages": messages},
                     "context": {"thread_id": thread_id},
                     "stream_mode": ["messages"],
-                    "config": {"recursion_limit": 10},
+                    "config": {"recursion_limit": 25},
                 }
 
                 async with client.stream(
