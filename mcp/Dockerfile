@@ -2,8 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install build tools and copy package files
+# Copy all package files (README.md required by pyproject.toml metadata)
 COPY pyproject.toml .
+COPY README.md .
 COPY src/ src/
 COPY __main__.py .
 
