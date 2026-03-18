@@ -26,14 +26,7 @@ log = logging.getLogger("bundlefabric_mcp")
 
 # ── MCP instance ──────────────────────────────────────────────────────────────
 
-mcp = FastMCP(
-    "BundleFabric",
-    description=(
-        "Cognitive OS — discover and execute AI bundles. "
-        "Bundles are specialized AI programs (Linux ops, GTM debug, …) "
-        "that map natural-language intent to structured DeerFlow workflows."
-    ),
-)
+mcp = FastMCP("BundleFabric")
 
 # ── Lazy singletons (initialised in lifespan) ─────────────────────────────────
 
