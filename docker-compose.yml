@@ -86,8 +86,6 @@ services:
       - BF_LOG_LEVEL=INFO
     networks:
       - bundlefabric_net
-    depends_on:
-      - bundlefabric-api
     profiles:
       - phase3
 
