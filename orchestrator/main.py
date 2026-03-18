@@ -26,6 +26,11 @@ from memory.rag_manager import RAGManager
 from memory.history_manager import init_db, record_execution, get_history, get_execution
 from auth.jwt_auth import require_auth, require_admin, create_token, list_users, create_user, delete_user, rotate_jwt_secret
 
+
+# Prometheus metrics
+from prometheus_client import Gauge, Counter, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+from fastapi.responses import Response as _Response
+
 VERSION = "2.1.0"
 START_TIME = time.time()
 
@@ -120,6 +125,14 @@ _mesh = _FriendMesh()
 _fusion = _BundleFusion()
 _meta_agent = _MetaAgent()
 _evaluator_p3 = _BundleEvaluator()
+
+
+# Prometheus Gauges
+_tps_gauge = Gauge('bundlefabric_bundle_tps', 'TPS score per bundle', ['bundle_id'])
+_usage_gauge = Gauge('bundlefabric_bundle_usage_total', 'Usage count per bundle', ['bundle_id'])
+_bundles_loaded = Gauge('bundlefabric_bundles_loaded', 'Number of bundles loaded')
+_executions_counter = Counter('bundlefabric_executions_total', 'Total execution requests')
+_intent_counter = Counter('bundlefabric_intent_requests_total', 'Total intent requests')
 
 
 
@@ -353,6 +366,43 @@ async def meta_create_bundle(suggestion_id: str, _auth=Depends(require_admin)):
         raise HTTPException(status_code=422, detail=str(e))
 
 
+
+@app.post("/meta/analyze-and-suggest/stream", tags=["Meta-Agent"])
+async def meta_analyze_and_suggest_stream(_auth=Depends(require_admin)):
+    """Stream meta-agent analysis progress as SSE. Admin only."""
+    import json as _json
+
+    async def event_stream():
+        try:
+            yield "data: " + _json.dumps({"type": "status", "msg": "Analyse de l'historique d'exécution..."}) + "\n\n"
+            patterns = await _meta_agent.analyze_history()
+            yield "data: " + _json.dumps({"type": "patterns", "msg": f"Trouvé {len(patterns)} pattern(s) non résolus", "count": len(patterns), "patterns": patterns}) + "\n\n"
+
+            if not patterns:
+                yield "data: " + _json.dumps({"type": "done", "msg": "Aucun pattern — historique insuffisant", "suggestions": []}) + "\n\n"
+                return
+
+            suggestions = []
+            for i, pattern in enumerate(patterns[:3]):
+                p_name = pattern.get("pattern", str(pattern))
+                yield "data: " + _json.dumps({"type": "generating", "msg": f"Génération suggestion {i+1}/{ min(3, len(patterns))} : {p_name[:50]}..."}) + "\n\n"
+                try:
+                    suggestion = await _meta_agent.suggest_bundle(pattern)
+                    if suggestion:
+                        sid = _meta_agent.add_suggestion(suggestion)
+                        suggestions.append({**suggestion, "id": sid})
+                        yield "data: " + _json.dumps({"type": "suggestion", "msg": f"✓ Suggestion créée : {suggestion.get('name','?')}", "suggestion": {**suggestion, "id": sid}}) + "\n\n"
+                except Exception as e:
+                    yield "data: " + _json.dumps({"type": "error", "msg": f"Erreur génération: {str(e)[:80]}"}) + "\n\n"
+
+            yield "data: " + _json.dumps({"type": "done", "msg": f"Terminé — {len(suggestions)} suggestion(s) créée(s)", "suggestions": suggestions}) + "\n\n"
+        except Exception as e:
+            yield "data: " + _json.dumps({"type": "error", "msg": f"Erreur critique: {str(e)[:100]}"}) + "\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.post("/meta/analyze-and-suggest", tags=["Meta-Agent"])
 async def meta_analyze_and_suggest(_auth=Depends(require_admin)):
     """Analyze history AND generate suggestions via Claude Haiku. Admin only."""
@@ -447,6 +497,41 @@ Commence directement par le contenu, sans titre ni introduction."""
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    """Prometheus metrics endpoint — bundle TPS, usage, executions."""
+    import pathlib
+    import yaml as _yaml
+    # Refresh TPS gauges from bundle manifests
+    try:
+        bdir = pathlib.Path(bundles_dir)
+        count = 0
+        for bdir_item in sorted(bdir.iterdir()):
+            if bdir_item.is_dir() and (bdir_item / "manifest.yaml").exists():
+                try:
+                    manifest = _yaml.safe_load((bdir_item / "manifest.yaml").read_text())
+                    bid = bdir_item.name
+                    temporal = manifest.get("temporal", {})
+                    freshness = temporal.get("freshness_score", 0.5)
+                    ecosystem = temporal.get("ecosystem_alignment", 0.5)
+                    usage_freq = temporal.get("usage_frequency", 0.0)
+                    # TPS = freshness*0.4 + usage_freq*0.3 + ecosystem*0.3
+                    tps = freshness * 0.4 + usage_freq * 0.3 + ecosystem * 0.3
+                    usage = temporal.get("usage_count", 0)
+                    _tps_gauge.labels(bundle_id=bid).set(tps)
+                    _usage_gauge.labels(bundle_id=bid).set(usage)
+                    count += 1
+                except Exception:
+                    pass
+        _bundles_loaded.set(count)
+    except Exception:
+        pass
+    return _Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 # ── Admin routes ─────────────────────────────────────────────────────────────
