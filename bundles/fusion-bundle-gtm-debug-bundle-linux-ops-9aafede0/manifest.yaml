@@ -1,0 +1,38 @@
+capabilities:
+- bash-scripting
+- linux-sysadmin
+- process-management
+- nginx-configuration
+- docker-operations
+- ssh-hardening
+- cron-scheduling
+- log-analysis
+- performance-tuning
+- network-debugging
+- gtm-configuration
+- ga4-setup
+- datalayer-debugging
+- ecommerce-tracking
+- conversion-tracking
+- tag-audit
+- trigger-configuration
+- custom-dimensions
+- woocommerce-tracking
+- consent-mode
+description: 'Composite bundle fusing: Linux Operations Expert, GTM & Analytics Debug
+  Expert'
+fusion_sources:
+- bundle-linux-ops
+- bundle-gtm-debug
+id: fusion-bundle-gtm-debug-bundle-linux-ops-9aafede0
+meta:
+  created_at: '2026-03-18'
+  created_by: fusion_engine
+name: 'Fusion: Linux Operations Expert + GTM & Analytics Debug Expert'
+temporal:
+  ecosystem_alignment: 0.89
+  freshness_score: 0.875
+  status: experimental
+  usage_count: 0
+  usage_frequency: 0.0
+version: 1.0.0

@@ -1,0 +1,8 @@
+# BundleFabric Friend Mesh Configuration
+# Set MESH_ENABLED=true in docker-compose.yml to activate
+
+node_id: vps3-main
+peers: []
+# peers:
+#   - url: https://api.friend.bundlefabric.org
+#     name: Alice Node

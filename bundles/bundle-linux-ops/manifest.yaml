@@ -37,6 +37,7 @@ keywords:
 - process
 license: MIT
 name: Linux Operations Expert
+public: true
 temporal:
   ecosystem_alignment: 0.9
   freshness_score: 0.9

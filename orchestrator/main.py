@@ -32,6 +32,7 @@ START_TIME = time.time()
 # ── Singletons ──────────────────────────────────────────────────────────────
 loader = BundleLoader()
 builder = BundleBuilder()
+bundles_dir = str(loader.bundles_dir)
 evaluator = BundleEvaluator()
 intent_engine = IntentEngine(use_ollama=os.getenv("USE_OLLAMA", "true").lower() == "true")
 resolver = BundleResolver(loader=loader)
@@ -76,6 +77,14 @@ async def lifespan(app: FastAPI):
 
 
 import auth.oauth_router as _oauth_router
+# Phase 3 imports
+from security.crypto_manager import BundleCryptoManager as _CryptoManager
+from mesh.bundle_registry import BundleRegistry as _BundleRegistry
+from mesh.friend_mesh import FriendMesh as _FriendMesh
+from factory.fusion import BundleFusion as _BundleFusion
+from factory.meta_agent import MetaAgent as _MetaAgent
+from factory.evaluator import BundleEvaluator as _BundleEvaluator
+
 
 app = FastAPI(
     title="BundleFabric API",
@@ -102,6 +111,17 @@ app.add_middleware(
 )
 
 app.include_router(_oauth_router.router)
+
+
+# Phase 3 singletons
+_crypto = _CryptoManager()
+_registry = _BundleRegistry()
+_mesh = _FriendMesh()
+_fusion = _BundleFusion()
+_meta_agent = _MetaAgent()
+_evaluator_p3 = _BundleEvaluator()
+
+
 
 
 # ── Request/Response models ─────────────────────────────────────────────────
@@ -165,6 +185,268 @@ async def admin_rotate_jwt(_auth=Depends(require_admin)):
         "warning": "all tokens invalidated — all users must re-authenticate",
         "secret_preview": new_secret[:8] + "****",
     }
+
+
+
+
+# ═══════════════════════════════════════════════════════════════
+# PHASE 3 ROUTES
+# ═══════════════════════════════════════════════════════════════
+
+# ── Bundle crypto & public ────────────────────────────────────────────────────
+
+@app.get("/bundles/public", tags=["Bundles"])
+async def list_public_bundles():
+    """List bundles marked public:true — no authentication required."""
+    _registry.refresh_local()
+    return {"bundles": _registry.get_public(), "count": len(_registry.get_public())}
+
+
+@app.get("/bundles/{bundle_id}/hash", tags=["Bundles"])
+async def get_bundle_hash(bundle_id: str, _auth=Depends(require_auth)):
+    """Return SHA-256 hash + signed status of a bundle's manifest."""
+    import pathlib
+    bundle_path = pathlib.Path(bundles_dir) / bundle_id
+    if not bundle_path.exists():
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
+    try:
+        hash_val = _crypto.hash_bundle(bundle_path)
+        signed = _crypto.is_bundle_signed(bundle_path)
+        return {"bundle_id": bundle_id, "hash": hash_val, "signed": signed, "node_id": _crypto.get_node_id()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/bundles/{bundle_id}/health", tags=["Bundles"])
+async def get_bundle_health(bundle_id: str, _auth=Depends(require_auth)):
+    """Return TPS, obsolescence score, age, and alerts for a bundle."""
+    import pathlib
+    bundle_path = pathlib.Path(bundles_dir) / bundle_id
+    if not bundle_path.exists():
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
+    return _evaluator_p3.get_bundle_health(bundle_path)
+
+
+# ── Mesh routes ───────────────────────────────────────────────────────────────
+
+@app.get("/mesh/status", tags=["Mesh"])
+async def mesh_status():
+    """Return Friend Mesh status (enabled, node_id, peer_count, bundle_count)."""
+    return _mesh.get_status()
+
+
+@app.get("/mesh/peers", tags=["Mesh"])
+async def mesh_peers():
+    """Return online/offline status of all configured peers."""
+    peers = await _mesh.get_peers_status()
+    return {"peers": peers}
+
+
+@app.get("/mesh/bundles", tags=["Mesh"])
+async def mesh_advertise():
+    """Advertise local bundles to mesh peers (manifest metadata only, no RAG)."""
+    return _mesh.advertise_bundles()
+
+
+@app.get("/mesh/bundles/{bundle_id}/manifest", tags=["Mesh"])
+async def mesh_bundle_manifest(bundle_id: str):
+    """Return manifest.yaml for a specific bundle (for peer download)."""
+    manifest = _mesh.get_manifest(bundle_id)
+    if not manifest:
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
+    return manifest
+
+
+@app.get("/mesh/bundles/{bundle_id}/system_prompt", tags=["Mesh"])
+async def mesh_bundle_system_prompt(bundle_id: str):
+    """Return system.md for a bundle (for peer download)."""
+    import pathlib
+    from fastapi.responses import PlainTextResponse
+    system_path = pathlib.Path(bundles_dir) / bundle_id / "prompts" / "system.md"
+    if not system_path.exists():
+        raise HTTPException(status_code=404, detail="system.md not found")
+    return PlainTextResponse(system_path.read_text())
+
+
+class MeshDownloadRequest(BaseModel):
+    peer_url: str
+
+
+@app.post("/mesh/bundles/{bundle_id}/request", tags=["Mesh"])
+async def mesh_request_bundle(bundle_id: str, req: MeshDownloadRequest, _auth=Depends(require_auth)):
+    """Download a bundle from a peer node. Verifies signature before installing."""
+    success = await _mesh.download_bundle(req.peer_url, bundle_id, _crypto)
+    if success:
+        # Re-index in Qdrant
+        try:
+            import pathlib
+            bundle_path = pathlib.Path(bundles_dir) / bundle_id
+            rag.index_bundle(bundle_path)
+        except Exception as e:
+            print(f"[Mesh] Qdrant indexing failed for {bundle_id}: {e}")
+        return {"status": "installed", "bundle_id": bundle_id, "peer_url": req.peer_url}
+    raise HTTPException(status_code=422, detail=f"Failed to download or verify bundle '{bundle_id}'")
+
+
+@app.get("/mesh/registry", tags=["Mesh"])
+async def mesh_registry(_auth=Depends(require_auth)):
+    """Return the full distributed bundle registry (local + all known peers)."""
+    _registry.refresh_local()
+    return _registry.get_all()
+
+
+# ── Bundle Fusion ─────────────────────────────────────────────────────────────
+
+class FuseRequest(BaseModel):
+    bundle_ids: list
+
+
+@app.post("/bundles/fuse", tags=["Bundles"])
+async def fuse_bundles(req: FuseRequest, _auth=Depends(require_admin)):
+    """Merge 2+ bundles into a composite fusion bundle. Admin only."""
+    if len(req.bundle_ids) < 2:
+        raise HTTPException(status_code=422, detail="Provide at least 2 bundle_ids")
+    try:
+        result = _fusion.merge(req.bundle_ids)
+        # Index fusion bundle in Qdrant
+        try:
+            import pathlib
+            rag.index_bundle(pathlib.Path(result["path"]))
+        except Exception as e:
+            print(f"[Fusion] Qdrant indexing failed: {e}")
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Meta-Agent ────────────────────────────────────────────────────────────────
+
+@app.post("/meta/analyze", tags=["Meta-Agent"])
+async def meta_analyze(_auth=Depends(require_admin)):
+    """Analyze execution history for unresolved intent patterns. Admin only."""
+    patterns = await _meta_agent.analyze_history()
+    return {"patterns": patterns, "count": len(patterns)}
+
+
+@app.get("/meta/suggestions", tags=["Meta-Agent"])
+async def meta_suggestions(_auth=Depends(require_admin)):
+    """Return pending bundle suggestions from meta-agent. Admin only."""
+    suggestions = _meta_agent.get_suggestions()
+    return {"suggestions": suggestions, "count": len(suggestions)}
+
+
+@app.post("/meta/suggestions/{suggestion_id}/create", tags=["Meta-Agent"])
+async def meta_create_bundle(suggestion_id: str, _auth=Depends(require_admin)):
+    """Create a bundle from a meta-agent suggestion. Admin only."""
+    try:
+        result = _meta_agent.create_from_suggestion(suggestion_id, builder)
+        # Index in Qdrant
+        try:
+            import pathlib
+            rag.index_bundle(pathlib.Path(bundles_dir) / result["bundle_id"])
+        except Exception as e:
+            print(f"[MetaAgent] Qdrant indexing failed: {e}")
+        return result
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/meta/analyze-and-suggest", tags=["Meta-Agent"])
+async def meta_analyze_and_suggest(_auth=Depends(require_admin)):
+    """Analyze history AND generate suggestions via Claude Haiku. Admin only."""
+    patterns = await _meta_agent.analyze_history()
+    suggestions = []
+    for pattern in patterns[:3]:  # Limit to 3 suggestions per call to control costs
+        suggestion = await _meta_agent.suggest_bundle(pattern)
+        if suggestion:
+            sid = _meta_agent.add_suggestion(suggestion)
+            suggestions.append(suggestion)
+    return {"patterns_analyzed": len(patterns), "suggestions_created": len(suggestions), "suggestions": suggestions}
+
+
+# ── Factory Health & Rebuild ──────────────────────────────────────────────────
+
+@app.get("/factory/health", tags=["Factory"])
+async def factory_health(_auth=Depends(require_admin)):
+    """Return health report for all bundles. Admin only."""
+    import pathlib
+    bdir = pathlib.Path(bundles_dir)
+    reports = []
+    for bundle_dir in sorted(bdir.iterdir()):
+        if bundle_dir.is_dir() and (bundle_dir / "manifest.yaml").exists():
+            try:
+                report = _evaluator_p3.get_bundle_health(bundle_dir)
+                reports.append(report)
+            except Exception as e:
+                reports.append({"id": bundle_dir.name, "error": str(e)})
+    return {"bundles": reports, "count": len(reports)}
+
+
+@app.post("/factory/rebuild/{bundle_id}", tags=["Factory"])
+async def factory_rebuild_bundle(bundle_id: str, _auth=Depends(require_admin)):
+    """Regenerate bundle system.md via Claude Haiku using usage history context. Admin only."""
+    import pathlib
+    bundle_path = pathlib.Path(bundles_dir) / bundle_id
+    if not bundle_path.exists():
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
+
+    api_key = None
+    key_file = pathlib.Path("/app/secrets_vault/anthropic_key.txt")
+    if key_file.exists():
+        api_key = key_file.read_text().strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Anthropic API key not configured")
+
+    import yaml, time
+    manifest = yaml.safe_load((bundle_path / "manifest.yaml").read_text())
+    name = manifest.get("name", bundle_id)
+    caps = manifest.get("capabilities", [])
+
+    prompt = f"""Tu es un expert en rédaction de system prompts pour agents IA spécialisés.
+
+Régénère le system prompt pour le bundle BundleFabric suivant :
+- Nom : {name}
+- Capabilities : {', '.join(caps)}
+- Date de rebuild : {time.strftime('%Y-%m-%d')}
+
+Génère un system prompt professionnel, complet et à jour (3-5 paragraphes).
+Commence directement par le contenu, sans titre ni introduction."""
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": "claude-haiku-4-5", "max_tokens": 1024,
+                      "messages": [{"role": "user", "content": prompt}]},
+            )
+            if resp.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"Claude error: {resp.status_code}")
+            new_prompt = resp.json()["content"][0]["text"].strip()
+
+        (bundle_path / "prompts").mkdir(exist_ok=True)
+        (bundle_path / "prompts" / "system.md").write_text(new_prompt)
+
+        # Update manifest rebuilt_at
+        manifest.setdefault("meta", {})["last_rebuilt_at"] = time.strftime("%Y-%m-%d")
+        (bundle_path / "manifest.yaml").write_text(
+            yaml.dump(manifest, default_flow_style=False, allow_unicode=True)
+        )
+
+        # Re-index in Qdrant
+        try:
+            rag.index_bundle(bundle_path)
+        except Exception:
+            pass
+
+        return {"status": "rebuilt", "bundle_id": bundle_id, "system_md_length": len(new_prompt)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Admin routes ─────────────────────────────────────────────────────────────
