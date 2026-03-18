@@ -218,6 +218,184 @@ User clicks "Login with GitHub"
 - **Unknown user**: auto-created with `role: user`, `github_username` stored in `users.json`
 - To promote an OAuth user to admin, edit `secrets_vault/users.json` manually
 
+
+## Phase 3 — P2P Mesh, Signing & Auto-Evolution
+
+### Bundle Signing (ed25519)
+
+Each bundle can be cryptographically signed by its node. Signatures cover `manifest.yaml` (SHA-256 → ed25519).
+
+```bash
+# Generate node keypair (one-time)
+docker exec bundlefabric-api python3 -c "
+import sys; sys.path.insert(0, '/app')
+from security.crypto_manager import BundleCryptoManager
+cm = BundleCryptoManager()
+result = cm.generate_node_keypair()
+print('Node ID:', result['node_id'])
+"
+
+# Sign a bundle
+docker exec bundlefabric-api python3 -c "
+import sys; sys.path.insert(0, '/app')
+from security.crypto_manager import BundleCryptoManager
+from pathlib import Path
+cm = BundleCryptoManager()
+cm.sign_bundle(Path('/app/bundles/bundle-linux-ops'))
+print('Signed ✓')
+"
+
+# Check bundle hash + signature status
+curl -H "Authorization: Bearer $JWT" \
+  https://api.bundlefabric.org/bundles/bundle-linux-ops/hash
+# → {"bundle_id":"bundle-linux-ops","hash":"8fc625c1...","signed":true,"node_id":"72b230ecf8414b33"}
+```
+
+Keys are stored in `secrets_vault/node_keys/` (private key chmod 600).
+
+---
+
+### Friend Mesh (P2P HTTP Gossip)
+
+BundleFabric uses a lightweight HTTP gossip protocol between nodes. By default the mesh is **disabled** — activate it when you have at least one peer.
+
+**Configure peers** (`friends.yaml` at project root):
+```yaml
+node_id: "my-node"
+peers:
+  - url: "https://api.friend.bundlefabric.org"
+    name: "Alice Node"
+```
+
+**Enable mesh** in `docker-compose.yml`:
+```yaml
+environment:
+  - MESH_ENABLED=true
+```
+
+**Mesh API routes:**
+
+| Route | Description |
+|-------|-------------|
+| `GET /mesh/status` | Node status: enabled, node_id, peer_count |
+| `GET /mesh/peers` | Online/offline status of all peers |
+| `GET /mesh/bundles` | Advertise local bundles (manifest metadata only, no RAG) |
+| `GET /mesh/bundles/{id}/manifest` | Get a specific bundle manifest |
+| `POST /mesh/bundles/{id}/request` | Download bundle from peer (verifies signature) |
+| `GET /mesh/registry` | Full distributed registry (local + all peers) |
+
+Downloaded bundles are verified against the peer's ed25519 signature before installation. Bundles with invalid signatures are rejected.
+
+---
+
+### Bundle Fusion
+
+Merge two or more bundles into a composite bundle that combines their capabilities and system prompts.
+
+```bash
+curl -X POST https://api.bundlefabric.org/bundles/fuse \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"bundle_ids": ["bundle-linux-ops", "bundle-gtm-debug"]}'
+# → {"id":"fusion-bundle-gtm-debug-bundle-linux-ops-9aafede0","sources":[...],...}
+```
+
+The fusion bundle has:
+- **capabilities** = union of all source capabilities (deduplicated)
+- **system.md** = concatenation of source prompts with `--- [source_id] ---` separators
+- **freshness_score** = average of source scores
+- `fusion_sources` field listing source bundle IDs
+
+---
+
+### Meta-Agent (Bundle Fabricant)
+
+The Meta-Agent analyzes execution history to identify unresolved intents and suggests new bundles via Claude Haiku.
+
+```bash
+# 1. Analyze history for patterns
+curl -X POST https://api.bundlefabric.org/meta/analyze \
+  -H "Authorization: Bearer $ADMIN_JWT"
+# → {"patterns": [{"pattern": "debug kubernetes pods", "count": 5}], "count": 1}
+
+# 2. Generate bundle suggestions (uses Claude Haiku)
+curl -X POST https://api.bundlefabric.org/meta/analyze-and-suggest \
+  -H "Authorization: Bearer $ADMIN_JWT"
+
+# 3. Review pending suggestions
+curl https://api.bundlefabric.org/meta/suggestions \
+  -H "Authorization: Bearer $ADMIN_JWT"
+
+# 4. Create bundle from approved suggestion
+curl -X POST https://api.bundlefabric.org/meta/suggestions/{suggestion_id}/create \
+  -H "Authorization: Bearer $ADMIN_JWT"
+```
+
+Bundles created by the meta-agent have `created_by: meta_agent` in their manifest.
+Suggestions are persisted in `data/meta_suggestions.json`.
+
+> **Cost note:** `analyze-and-suggest` calls Claude Haiku (≈500 tokens/suggestion). Use manually.
+
+---
+
+### Factory Health & Rebuild
+
+```bash
+# Health report for all bundles
+curl https://api.bundlefabric.org/factory/health \
+  -H "Authorization: Bearer $ADMIN_JWT"
+# → TPS, obsolescence score, age_days, signed status, alerts per bundle
+
+# Health for a single bundle
+curl https://api.bundlefabric.org/bundles/bundle-linux-ops/health \
+  -H "Authorization: Bearer $JWT"
+
+# Rebuild a bundle's system.md via Claude Haiku
+curl -X POST https://api.bundlefabric.org/factory/rebuild/bundle-linux-ops \
+  -H "Authorization: Bearer $ADMIN_JWT"
+# → {"status":"rebuilt","bundle_id":"bundle-linux-ops","system_md_length":1842}
+```
+
+**Obsolescence criteria:** `freshness < 0.3 AND usage_count < 5 AND age > 30 days`
+
+---
+
+### Public Registry
+
+Bundles marked `public: true` in their manifest are exposed without authentication:
+
+```bash
+curl https://api.bundlefabric.org/bundles/public
+# → {"bundles": [...], "count": 2}
+```
+
+The public registry page is live at **[bundlefabric.org](https://bundlefabric.org)**.
+
+To mark a bundle as public, add `public: true` to its `manifest.yaml`.
+
+---
+
+### Phase 3 API Summary
+
+| Route | Method | Auth | Description |
+|-------|--------|------|-------------|
+| `/bundles/public` | GET | None | List public bundles |
+| `/bundles/{id}/hash` | GET | JWT | Bundle SHA-256 hash + signed status |
+| `/bundles/{id}/health` | GET | JWT | TPS, obsolescence, age, alerts |
+| `/bundles/fuse` | POST | Admin | Merge 2+ bundles into composite |
+| `/mesh/status` | GET | None | Mesh node status |
+| `/mesh/peers` | GET | None | Peer online/offline status |
+| `/mesh/bundles` | GET | None | Advertise local bundles |
+| `/mesh/bundles/{id}/manifest` | GET | None | Bundle manifest for peers |
+| `/mesh/bundles/{id}/request` | POST | JWT | Download bundle from peer |
+| `/mesh/registry` | GET | JWT | Full distributed registry |
+| `/meta/analyze` | POST | Admin | Analyze history for patterns |
+| `/meta/analyze-and-suggest` | POST | Admin | Analyze + generate suggestions |
+| `/meta/suggestions` | GET | Admin | List pending suggestions |
+| `/meta/suggestions/{id}/create` | POST | Admin | Create bundle from suggestion |
+| `/factory/health` | GET | Admin | All bundles health report |
+| `/factory/rebuild/{id}` | POST | Admin | Rebuild system.md via Claude Haiku |
+
 ## JWT Secret Rotation
 
 Rotate the JWT signing secret from the admin UI without restarting the container.

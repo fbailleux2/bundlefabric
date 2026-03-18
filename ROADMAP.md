@@ -1,6 +1,6 @@
 # BundleFabric — Roadmap
 
-## Phase 1 — Infrastructure & Documentation (Mars 2026) ✅ EN COURS
+## Phase 1 — Infrastructure & Documentation (Mars 2026) ✅ COMPLÈTE
 
 ### Objectif
 Poser les bases : serveur configuré, domaine opérationnel, documentation complète.
@@ -10,10 +10,10 @@ Poser les bases : serveur configuré, domaine opérationnel, documentation compl
 - [x] Création structure /opt/bundlefabric sur VPS3
 - [x] Documentation technique complète (ARCHITECTURE, BUNDLE_SPEC, STACK)
 - [x] Configuration Nginx HTTP bundlefabric.org
-- [ ] DNS A record @ et www → 135.125.196.150
-- [ ] Certbot + SSL Let's Encrypt bundlefabric.org
-- [ ] Page de présentation HTML bundlefabric.org
-- [ ] Premier bundle de test créé manuellement
+- [x] DNS A record @ et www → 135.125.196.150
+- [x] Certbot + SSL Let's Encrypt bundlefabric.org
+- [x] Page de présentation HTML bundlefabric.org (public registry)
+- [x] Premier bundle créé (bundle-linux-ops, bundle-gtm-debug)
 
 ### Stack disponible (déjà déployée)
 ✅ DeerFlow (CPU cognitif)
@@ -27,22 +27,22 @@ Poser les bases : serveur configuré, domaine opérationnel, documentation compl
 
 ---
 
-## Phase 2 — Orchestrateur v1 (Avril 2026)
+## Phase 2 — Orchestrateur v1 (Mars 2026) ✅ COMPLÈTE
 
 ### Objectif
 Construire le cerveau de BundleFabric : l'orchestrateur qui transforme une intention humaine en action.
 
 ### Jalons
-- [ ] `orchestrator/intent_engine.py` — extraction NLP d'intention
-- [ ] `orchestrator/bundle_resolver.py` — recherche + scoring bundles (registry local)
-- [ ] `orchestrator/orchestrator.py` — pipeline complet intention→bundle→DeerFlow
-- [ ] `factory/builder.py` — création automatique bundle depuis sources
-- [ ] `factory/loader.py` — chargement bundle dans DeerFlow
-- [ ] `factory/evaluator.py` — calcul TPS score
-- [ ] `memory/rag_manager.py` — indexation Qdrant
-- [ ] Interface WebUI basique (React ou Svelte)
-- [ ] Docker compose BundleFabric app (port 19100)
-- [ ] Nginx HTTPS app.bundlefabric.org
+- [x] `orchestrator/intent_engine.py` — extraction NLP + Claude Haiku
+- [x] `orchestrator/bundle_resolver.py` — recherche + scoring TPS
+- [x] Pipeline complet intention→bundle→Claude Haiku SSE streaming
+- [x] `factory/builder.py` — création + scaffold bundles
+- [x] `factory/loader.py` — chargement bundles
+- [x] `factory/evaluator.py` — TPS + obsolescence + health
+- [x] `memory/rag_manager.py` — indexation Qdrant
+- [x] WebUI SPA (French, dark theme, auth JWT, admin tab)
+- [x] Docker compose phase2 — port 19100
+- [x] Nginx HTTPS app.bundlefabric.org + api + bundlefabric.org
 
 ### Livraison
 - Premier bundle créé automatiquement par la Factory
@@ -51,21 +51,21 @@ Construire le cerveau de BundleFabric : l'orchestrateur qui transforme une inten
 
 ---
 
-## Phase 3 — Friend Mesh P2P & Auto-évolution (Juin 2026)
+## Phase 3 — Friend Mesh P2P & Auto-évolution (Mars 2026) ✅ COMPLÈTE
 
 ### Objectif
 Rendre BundleFabric distribué et auto-améliorant.
 
 ### Jalons
-- [ ] `mesh/friend_mesh.py` — protocole gossip P2P
-- [ ] `mesh/bundle_registry.py` — index distribué de bundles
-- [ ] Partage sécurisé de bundles (manifest only + signature ed25519)
-- [ ] `factory/fusion.py` — fusion automatique multi-bundles
-- [ ] Meta-Agent fabricant (orchestrateur qui crée ses propres spécialisations)
-- [ ] Temporal scoring automatique (TPS mis à jour à chaque usage)
-- [ ] Cycle learn → rebuild automatique
-- [ ] API publique REST bundlefabric.org/api
-- [ ] Page publique registry bundles (bundlefabric.org)
+- [x] `mesh/friend_mesh.py` — HTTP gossip, discover/advertise/download
+- [x] `mesh/bundle_registry.py` — registry distribué JSON
+- [x] Signing ed25519 — security/crypto_manager.py (node: 72b230ecf8414b33)
+- [x] `factory/fusion.py` — merge capabilities + prompts + TPS
+- [x] Meta-Agent fabricant — analyse history → Claude Haiku → suggestions
+- [x] TPS auto-incrémenté à chaque exécution via increment_usage()
+- [x] Cycle rebuild — POST /factory/rebuild/{id} via Claude Haiku
+- [x] API publique — api.bundlefabric.org (HTTPS, JWT, 35+ routes)
+- [x] bundlefabric.org — page publique registry (vitrine)
 
 ### Livraison
 - Réseau P2P fonctionnel entre 2+ nodes
