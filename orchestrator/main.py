@@ -786,6 +786,128 @@ async def execute_bundle_stream(req: ExecuteRequest, request: Request, _auth=Dep
         },
     )
 
+
+@app.post("/execute/deerflow/stream", tags=["Orchestration"])
+async def execute_deerflow_stream(req: ExecuteRequest, _auth=Depends(require_auth)):
+    """
+    Stream bundle execution via DeerFlow LangGraph (real integration).
+    Uses deer-flow-langgraph:2024 threads/runs/stream SSE API.
+    Falls back to Claude Haiku if LangGraph is unavailable or times out.
+    """
+    try:
+        bundle = loader.load_bundle(req.bundle_id)
+    except BundleNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Bundle '{req.bundle_id}' not found")
+
+    from orchestrator.deerflow_client import _build_system_prompt
+    system_prompt = _build_system_prompt(bundle)
+    start_ms = int(time.time() * 1000)
+
+    async def sse_generator():
+        import json  # ensure json available in nested generator scope
+        full_output = ""
+        status = "success"
+        error_msg = None
+        used_fallback = False
+        langgraph_failed = False
+
+        # Fast intent extraction (skip Ollama to not block the SSE stream)
+        # Ollama takes 30-90s on CPU-only — use keyword extraction instead
+        try:
+            from orchestrator.intent_engine import extract_fast as _extract_fast
+            intent_obj = _extract_fast(req.intent_text)
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': f'Intent extraction failed: {e}'})}\n\n"
+            return
+
+        # ── Phase 1: Try DeerFlow LangGraph ──────────────────────────────────
+        yield f"data: {json.dumps({'type': 'status', 'msg': '🦌 Connexion DeerFlow LangGraph…', 'engine': 'langgraph'})}\n\n"
+
+        try:
+            token_count = 0
+            error_seen = False
+            async for chunk in deerflow.execute_bundle_stream(
+                bundle_id=req.bundle_id,
+                intent=intent_obj,
+                workflow_id=req.workflow_id,
+                bundle=bundle,
+            ):
+                # Forward the chunk
+                yield chunk
+
+                # Track tokens
+                if "token" in chunk and '"content"' in chunk:
+                    try:
+                        import json as _j
+                        d = _j.loads(chunk[5:].strip()) if chunk.startswith("data:") else {}
+                        if d.get("type") == "token":
+                            full_output += d.get("content", "")
+                            token_count += 1
+                    except Exception:
+                        pass
+
+                # Detect error
+                if chunk.startswith("event: error"):
+                    error_seen = True
+                    langgraph_failed = True
+                    break
+
+            if error_seen or token_count == 0:
+                langgraph_failed = True
+
+        except Exception as e:
+            langgraph_failed = True
+            yield f"data: {json.dumps({'type': 'warning', 'msg': f'DeerFlow exception: {str(e)[:80]}'})}\n\n"
+
+        # ── Phase 2: Fallback to Claude Haiku if DeerFlow produced nothing ───
+        if langgraph_failed or not full_output.strip():
+            used_fallback = True
+            full_output = ""
+            yield f"data: {json.dumps({'type': 'status', 'msg': '⚡ Fallback Claude Haiku…', 'engine': 'claude_haiku'})}\n\n"
+            try:
+                async for chunk in _claude_execute_stream(
+                    intent_text=req.intent_text,
+                    system_prompt=system_prompt,
+                    bundle_id=req.bundle_id,
+                    bundle_name=bundle.name,
+                ):
+                    yield chunk
+                    if chunk.startswith("data:") and "token" in chunk:
+                        try:
+                            import json as _j
+                            d = _j.loads(chunk[5:].strip())
+                            if d.get("type") == "token":
+                                full_output += d.get("content", "")
+                        except Exception:
+                            pass
+                    if chunk.startswith("event: error"):
+                        status = "error"
+                        error_msg = "Claude Haiku fallback error"
+            except Exception as e:
+                status = "error"
+                error_msg = str(e)
+                yield f"event: error\ndata: {json.dumps({'message': f'Claude fallback failed: {e}'})}\n\n"
+                return
+
+        # ── Record + TPS ─────────────────────────────────────────────────────
+        duration_ms = int(time.time() * 1000) - start_ms
+        engine_used = "claude_haiku_fallback" if used_fallback else "langgraph"
+        asyncio.create_task(record_execution(
+            bundle_id=req.bundle_id, bundle_name=bundle.name, intent_text=req.intent_text,
+            goal=intent_obj.goal, status=status, output=full_output,
+            error_message=error_msg, duration_ms=duration_ms,
+        ))
+        asyncio.get_event_loop().run_in_executor(None, loader.increment_usage, req.bundle_id)
+
+        yield f"data: {json.dumps({'type': 'summary', 'engine': engine_used, 'duration_ms': duration_ms, 'output_length': len(full_output)})}\n\n"
+
+    return StreamingResponse(
+        sse_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── History routes ────────────────────────────────────────────────────────────
 
 @app.get("/history", tags=["History"])

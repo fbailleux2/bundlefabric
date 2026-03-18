@@ -16,6 +16,9 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - QDRANT_URL=http://qdrant:6333
       - DEERFLOW_URL=http://deer-flow-gateway:8001
+      - LANGGRAPH_URL=http://deer-flow-langgraph:2024
+      - LANGGRAPH_ASSISTANT_ID=bee7d354-5df5-5f26-a978-10ea053f620d
+      - DEERFLOW_TIMEOUT=120
       - OLLAMA_MODEL=qwen2.5:1.5b
       - USE_OLLAMA=true
       - OLLAMA_TIMEOUT=90
