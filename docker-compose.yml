@@ -19,9 +19,12 @@ services:
       - OLLAMA_MODEL=qwen2.5:1.5b
       - USE_OLLAMA=true
       - OLLAMA_TIMEOUT=90
+      - JWT_SECRET=d9d3c977eb4d712db6c9d1f94c675b42a4813cad835e1bbecd10e4992f16da8d
+      - HISTORY_DB=/app/data/history.db
     volumes:
       - ./bundles:/app/bundles:rw
-      - ./secrets_vault:/app/secrets_vault:ro
+      - ./secrets_vault:/app/secrets_vault:rw
+      - bundlefabric_data:/app/data
     networks:
       - bundlefabric_net
       - sylvea_net
@@ -33,6 +36,10 @@ services:
       start_period: 15s
     profiles:
       - phase2
+
+volumes:
+  bundlefabric_data:
+    name: bundlefabric_data
 
 networks:
   bundlefabric_net:
