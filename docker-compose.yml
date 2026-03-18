@@ -65,6 +65,32 @@ services:
     profiles:
       - phase2
 
+  bundlefabric-mcp:
+    build:
+      context: ./mcp
+      dockerfile: Dockerfile
+    container_name: bundlefabric-mcp
+    image: bundlefabric-mcp:1.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18090:8090"
+    environment:
+      - BF_API_KEY=${BF_ADMIN_API_KEY}
+      - BF_API_URL=http://bundlefabric-api:8000
+      - BF_TAILSCALE_URL=http://100.84.103.104:19100
+      - BF_MAX_BUNDLES=20
+      - BF_EXECUTE_TIMEOUT=120
+      - FASTMCP_TRANSPORT=sse
+      - FASTMCP_HOST=0.0.0.0
+      - FASTMCP_PORT=8090
+      - BF_LOG_LEVEL=INFO
+    networks:
+      - bundlefabric_net
+    depends_on:
+      - bundlefabric-api
+    profiles:
+      - phase3
+
 volumes:
   bundlefabric_data:
     name: bundlefabric_data
