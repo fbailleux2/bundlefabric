@@ -24,7 +24,7 @@ from orchestrator.bundle_resolver import BundleResolver
 from orchestrator.deerflow_client import DeerFlowClient
 from memory.rag_manager import RAGManager
 from memory.history_manager import init_db, record_execution, get_history, get_execution
-from auth.jwt_auth import require_auth, require_admin, create_token, list_users, create_user, delete_user
+from auth.jwt_auth import require_auth, require_admin, create_token, list_users, create_user, delete_user, rotate_jwt_secret
 
 VERSION = "2.1.0"
 START_TIME = time.time()
@@ -75,6 +75,8 @@ async def lifespan(app: FastAPI):
     print("[Shutdown] BundleFabric API stopped.")
 
 
+import auth.oauth_router as _oauth_router
+
 app = FastAPI(
     title="BundleFabric API",
     description="Cognitive OS Orchestrator — intent → bundle → DeerFlow",
@@ -98,6 +100,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(_oauth_router.router)
 
 
 # ── Request/Response models ─────────────────────────────────────────────────
@@ -149,6 +153,18 @@ class CreateUserRequest(BaseModel):
     username: str
     role: str = "user"
 
+
+
+
+@app.post("/admin/jwt/rotate", tags=["Admin"])
+async def admin_rotate_jwt(_auth=Depends(require_admin)):
+    """Rotate JWT signing secret. All existing tokens are immediately invalidated. Admin only."""
+    new_secret = rotate_jwt_secret()
+    return {
+        "status": "rotated",
+        "warning": "all tokens invalidated — all users must re-authenticate",
+        "secret_preview": new_secret[:8] + "****",
+    }
 
 
 # ── Admin routes ─────────────────────────────────────────────────────────────

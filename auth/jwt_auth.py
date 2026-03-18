@@ -8,10 +8,26 @@ from typing import Optional, Dict, Any
 
 import jwt
 import secrets
+import hmac
+import hashlib
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-JWT_SECRET = os.getenv("JWT_SECRET", "change_me_in_production")
+# Path to optional jwt_secret.txt override
+_JWT_SECRET_FILE = pathlib.Path(os.getenv("USERS_FILE", "/app/secrets_vault/users.json")).parent / "jwt_secret.txt"
+
+
+def _load_jwt_secret() -> str:
+    """Load JWT secret: file takes priority over env var."""
+    if _JWT_SECRET_FILE.exists():
+        s = _JWT_SECRET_FILE.read_text().strip()
+        if s:
+            print(f"[Auth] JWT secret loaded from {_JWT_SECRET_FILE}")
+            return s
+    return os.getenv("JWT_SECRET", "change_me_in_production")
+
+
+JWT_SECRET = _load_jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_SECONDS = 86400  # 24h
 USERS_FILE = os.getenv("USERS_FILE", "/app/secrets_vault/users.json")
@@ -97,6 +113,88 @@ def delete_user(username: str) -> bool:
     reload_users()
     return True
 
+
+
+
+def rotate_jwt_secret() -> str:
+    """Generate new JWT secret, persist to file, update in-memory. Returns new secret."""
+    global JWT_SECRET
+    new_secret = secrets.token_hex(32)
+    _JWT_SECRET_FILE.write_text(new_secret)
+    JWT_SECRET = new_secret
+    print(f"[Auth] JWT secret rotated — all existing tokens invalidated")
+    return new_secret
+
+
+def generate_oauth_state() -> str:
+    """Generate HMAC-signed OAuth state (stateless, no DB needed)."""
+    ts = str(int(time.time()))
+    nonce = secrets.token_hex(8)
+    raw = f"{ts}:{nonce}"
+    sig = hmac.new(JWT_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()[:16]
+    return f"{raw}:{sig}"
+
+
+def verify_oauth_state(state: str, max_age: int = 600) -> bool:
+    """Verify HMAC-signed OAuth state. Returns True if valid and not expired."""
+    try:
+        last_colon = state.rfind(':')
+        if last_colon == -1:
+            return False
+        raw, sig = state[:last_colon], state[last_colon + 1:]
+        expected = hmac.new(JWT_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()[:16]
+        if not hmac.compare_digest(sig, expected):
+            return False
+        ts = int(raw.split(':')[0])
+        return abs(time.time() - ts) < max_age
+    except Exception:
+        return False
+
+
+def find_user_by_github(github_login: str) -> Optional[Dict[str, Any]]:
+    """Find BF user by github_username field, then by username match."""
+    p = pathlib.Path(USERS_FILE)
+    if not p.exists():
+        return None
+    data = json.loads(p.read_text())
+    # Priority: explicit github_username field
+    for u in data:
+        if u.get('github_username') == github_login:
+            return u
+    # Fallback: username matches github login
+    for u in data:
+        if u.get('username') == github_login:
+            return u
+    return None
+
+
+def create_oauth_user(github_login: str) -> Dict[str, Any]:
+    """Auto-provision a BF user from GitHub OAuth. Role=user by default."""
+    p = pathlib.Path(USERS_FILE)
+    data = json.loads(p.read_text()) if p.exists() else []
+    api_key = f"bf_{github_login[:8]}_{secrets.token_hex(24)}"
+    user = {
+        'username': github_login,
+        'api_key': api_key,
+        'role': 'user',
+        'github_username': github_login,
+    }
+    data.append(user)
+    save_users(data)
+    reload_users()
+    print(f"[Auth] Auto-provisioned OAuth user: {github_login}")
+    return user
+
+
+def create_token_for_user(user: Dict[str, Any]) -> str:
+    """Create JWT token directly from a user dict (used by OAuth callback)."""
+    payload = {
+        'sub': user['username'],
+        'role': user.get('role', 'user'),
+        'iat': int(time.time()),
+        'exp': int(time.time()) + JWT_EXPIRY_SECONDS,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 # ── Token operations ─────────────────────────────────────────────────────────
 

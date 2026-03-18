@@ -21,6 +21,10 @@ services:
       - OLLAMA_TIMEOUT=90
       - JWT_SECRET=d9d3c977eb4d712db6c9d1f94c675b42a4813cad835e1bbecd10e4992f16da8d
       - HISTORY_DB=/app/data/history.db
+      - GITHUB_CLIENT_ID=
+      - GITHUB_CLIENT_SECRET=
+      - WEBUI_URL=https://app.bundlefabric.org
+      - API_URL=https://api.bundlefabric.org
     volumes:
       - ./bundles:/app/bundles:rw
       - ./secrets_vault:/app/secrets_vault:rw
