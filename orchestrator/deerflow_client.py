@@ -27,7 +27,7 @@ from models.bundle import BundleManifest
 DEERFLOW_URL = os.getenv("DEERFLOW_URL", "http://deer-flow-gateway:8001")
 LANGGRAPH_URL = os.getenv("LANGGRAPH_URL", "http://deer-flow-langgraph:2024")
 DEERFLOW_TIMEOUT = float(os.getenv("DEERFLOW_TIMEOUT", "120"))  # LLM inference is slow CPU-only
-LANGGRAPH_FIRST_TOKEN_TIMEOUT = float(os.getenv("LANGGRAPH_FIRST_TOKEN_TIMEOUT", "30"))
+LANGGRAPH_FIRST_TOKEN_TIMEOUT = float(os.getenv("LANGGRAPH_FIRST_TOKEN_TIMEOUT", "90"))  # Ollama CPU: 60-120s typical
 LANGGRAPH_ASSISTANT_ID = os.getenv("LANGGRAPH_ASSISTANT_ID", "bee7d354-5df5-5f26-a978-10ea053f620d")
 BUNDLES_DIR = os.getenv("BUNDLES_DIR", "/app/bundles")
 
@@ -224,6 +224,7 @@ class DeerFlowClient:
                     json={
                         "assistant_id": self.assistant_id,
                         "input": {"messages": messages},
+                        "context": {"thread_id": thread_id},
                         "config": {"recursion_limit": 10},
                     },
                 )
@@ -232,14 +233,32 @@ class DeerFlowClient:
                     data = resp.json()
                     # LangGraph returns state with messages list
                     msgs = data.get("messages", [])
-                    # Last AI message = final answer
+                    # Last AI message = final answer (DeerFlow/LangGraph message format variants)
                     output = ""
                     for msg in reversed(msgs):
-                        if isinstance(msg, dict) and msg.get("type") in ("ai", "AIMessage"):
-                            content = msg.get("content", "")
-                            if isinstance(content, str) and content.strip():
-                                output = content
+                        if not isinstance(msg, dict):
+                            continue
+                        msg_type = msg.get("type", "")
+                        msg_role = msg.get("role", "")
+                        is_ai = (
+                            msg_type in ("ai", "AIMessage", "AIMessageChunk")
+                            or msg_role in ("assistant", "ai")
+                        )
+                        if is_ai:
+                            raw_content = msg.get("content", "")
+                            if isinstance(raw_content, str) and raw_content.strip():
+                                output = raw_content
                                 break
+                            elif isinstance(raw_content, list):
+                                # content block list format
+                                parts = [
+                                    p.get("text", "") for p in raw_content
+                                    if isinstance(p, dict) and p.get("type") == "text"
+                                ]
+                                text = "".join(parts).strip()
+                                if text:
+                                    output = text
+                                    break
 
                     return ExecutionResult(
                         status="success",
@@ -320,6 +339,7 @@ class DeerFlowClient:
                 run_payload = {
                     "assistant_id": self.assistant_id,
                     "input": {"messages": messages},
+                    "context": {"thread_id": thread_id},
                     "stream_mode": ["messages"],
                     "config": {"recursion_limit": 10},
                 }
