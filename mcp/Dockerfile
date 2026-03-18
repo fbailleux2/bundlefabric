@@ -20,8 +20,8 @@ ENV FASTMCP_PORT=8090
 ENV BF_API_URL=http://bundlefabric-api:8000
 ENV BF_LOG_LEVEL=INFO
 
-# Health check
+# Health check — fastmcp SSE exposes /sse (not /health)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')" || exit 1
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8090/sse')" || exit 1
 
 CMD ["bundlefabric-mcp"]
