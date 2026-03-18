@@ -107,6 +107,18 @@
     .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    .btn-danger { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+    .btn-danger:hover { background: rgba(239,68,68,0.25); border-color: var(--red); }
+
+    .stream-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-top: 16px; }
+    .stream-card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    .stream-output { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.65; max-height: 420px; overflow-y: auto; white-space: pre-wrap; color: var(--text); word-break: break-word; user-select: text; }
+    .stream-status { font-size: 12px; color: var(--text3); font-style: italic; margin-top: 8px; min-height: 18px; }
+
+    .apikey-banner { background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.25); border-radius: 8px; padding: 12px 16px; margin: 12px 24px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+    .apikey-banner input { flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; color: var(--text); font-family: monospace; font-size: 13px; outline: none; }
+    .apikey-banner input:focus { border-color: var(--accent); }
+
     .empty-state { text-align: center; padding: 48px 24px; color: var(--text3); }
     .empty-icon { font-size: 40px; margin-bottom: 12px; }
     .empty-title { font-size: 16px; font-weight: 600; color: var(--text2); margin-bottom: 6px; }
@@ -147,6 +159,14 @@
   </div>
 </header>
 
+<div class="apikey-banner" id="apikey-banner" style="display:none;">
+  <span style="color:var(--yellow)">🔑</span>
+  <span style="color:var(--text2)">Clé API requise pour exécuter des bundles :</span>
+  <input type="password" id="apikey-input" placeholder="bf_admin_xxxx…" autocomplete="off" />
+  <button class="btn btn-secondary btn-sm" onclick="saveApiKey()">Enregistrer</button>
+  <button class="btn btn-sm" style="color:var(--text3); padding:6px 8px;" onclick="document.getElementById('apikey-banner').style.display='none'" title="Fermer">✕</button>
+</div>
+
 <nav>
   <div class="tab active" data-tab="orchestrate">⚡ Orchestrer</div>
   <div class="tab" data-tab="bundles">📦 Bundles</div>
@@ -179,6 +199,7 @@
 
     <div id="intent-result-zone"></div>
     <div id="matches-zone"></div>
+    <div id="stream-zone"></div>
   </div>
 
   <!-- ONGLET BUNDLES -->
@@ -422,18 +443,148 @@
     z.innerHTML = `<div class="card"><div class="card-header"><div class="card-title">📦 ${result.matches_count} bundle${result.matches_count !== 1 ? 's' : ''} correspondant${result.matches_count !== 1 ? 's' : ''}</div></div>${cards}</div>`;
   }
 
+  // ── Auth — API key / JWT management ─────────────────────────────────────────
+
+  let _cachedToken = null;
+  let _tokenExpiry = 0;
+
+  function saveApiKey() {
+    const key = document.getElementById('apikey-input').value.trim();
+    if (!key) return;
+    localStorage.setItem('bf_api_key', key);
+    _cachedToken = null;
+    _tokenExpiry = 0;
+    document.getElementById('apikey-banner').style.display = 'none';
+    showToast('Clé API enregistrée');
+  }
+
+  async function getToken() {
+    const now = Date.now();
+    if (_cachedToken && now < _tokenExpiry) return _cachedToken;
+    const apiKey = localStorage.getItem('bf_api_key');
+    if (!apiKey) {
+      document.getElementById('apikey-banner').style.display = 'flex';
+      throw new Error('Clé API non configurée — renseignez-la dans la bannière ci-dessus');
+    }
+    const r = await fetch(API + '/auth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+    if (!r.ok) {
+      localStorage.removeItem('bf_api_key');
+      document.getElementById('apikey-banner').style.display = 'flex';
+      throw new Error(`Authentification échouée (${r.status}) — vérifiez votre clé API`);
+    }
+    const data = await r.json();
+    _cachedToken = data.access_token;
+    _tokenExpiry = now + 23 * 3600 * 1000; // 23h cache
+    return _cachedToken;
+  }
+
+  async function apiFetchAuth(path, opts = {}) {
+    const token = await getToken();
+    return apiFetch(path, {
+      ...opts,
+      headers: { Authorization: `Bearer ${token}`, ...opts.headers },
+    });
+  }
+
+  // ── Streaming execution ───────────────────────────────────────────────────
+
   async function executeBundle(bundleId) {
     const text = document.getElementById('intent-text').value.trim();
     if (!text) { showToast('Intention requise', 'error'); return; }
-    showToast(`Exécution de ${bundleId} via DeerFlow…`);
+
+    // Setup streaming UI
+    const streamZone = document.getElementById('stream-zone');
+    streamZone.innerHTML = `
+      <div class="stream-card">
+        <div class="stream-card-title" id="stream-title">
+          <div class="spinner"></div> Exécution de <code>${esc(bundleId)}</code> via DeerFlow…
+        </div>
+        <div class="stream-output" id="stream-output"></div>
+        <div class="stream-status" id="stream-status">En attente du premier token…</div>
+      </div>`;
+    streamZone.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    // Disable all execute buttons during streaming
+    document.querySelectorAll('[onclick^="executeBundle"]').forEach(b => b.disabled = true);
+
+    const outputEl = document.getElementById('stream-output');
+    const statusEl = document.getElementById('stream-status');
+    const titleEl  = document.getElementById('stream-title');
+
     try {
-      const result = await apiFetch('/execute', {
+      const token = await getToken();
+      const response = await fetch(API + '/execute/deerflow/stream', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
         body: JSON.stringify({ bundle_id: bundleId, intent_text: text }),
       });
-      showToast(result.status === 'success' ? `✓ Exécuté : ${bundleId}` : `⚠ ${result.error_message}`, result.status === 'success' ? 'success' : 'error');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let pendingError = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) { pendingError = false; continue; }
+          if (line.startsWith('event:')) {
+            if (line.slice(6).trim() === 'error') pendingError = true;
+            continue;
+          }
+          if (line.startsWith('data:')) {
+            const raw = line.slice(5).trim();
+            try {
+              const d = JSON.parse(raw);
+              if (pendingError || d.type === 'error') {
+                statusEl.innerHTML = `<span style="color:var(--red)">⚠ ${esc(d.message || d.msg || raw)}</span>`;
+                pendingError = false;
+              } else if (d.type === 'token') {
+                outputEl.textContent += d.content || '';
+                outputEl.scrollTop = outputEl.scrollHeight;
+              } else if (d.type === 'status') {
+                statusEl.innerHTML = `<em>${esc(d.msg || '')}</em>`;
+              } else if (d.type === 'warning') {
+                statusEl.innerHTML = `<span style="color:var(--yellow)">⚠ ${esc(d.msg || '')}</span>`;
+              } else if (d.type === 'summary') {
+                statusEl.innerHTML = `<span style="color:var(--green)">✓ ${esc(d.engine || '?')} — ${d.duration_ms}ms</span>`;
+              }
+            } catch { /* skip non-JSON data lines */ }
+          }
+        }
+      }
+      titleEl.innerHTML = `✓ Résultat — <code>${esc(bundleId)}</code>`;
+
     } catch (e) {
-      showToast('Erreur d\'exécution : ' + e.message, 'error');
+      if (statusEl) statusEl.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+      showToast('Erreur : ' + e.message, 'error');
+    } finally {
+      document.querySelectorAll('[onclick^="executeBundle"]').forEach(b => b.disabled = false);
+    }
+  }
+
+  // ── Delete bundle ─────────────────────────────────────────────────────────
+
+  async function deleteBundle(bundleId, bundleName) {
+    if (!window.confirm(`Supprimer le bundle "${bundleName}" (${bundleId}) ?\n\nCette action est irréversible.`)) return;
+    try {
+      await apiFetchAuth(`/bundles/${encodeURIComponent(bundleId)}`, { method: 'DELETE' });
+      showToast(`✓ Bundle "${bundleName}" supprimé`);
+      loadBundles();
+    } catch (e) {
+      showToast('Erreur suppression : ' + e.message, 'error');
     }
   }
 
@@ -475,6 +626,7 @@
             <span style="color:${tpsColor(tps)}">TPS ${Math.round(tps*100)}%</span>
             <div class="tps-bar"><div class="tps-fill ${tpsClass(tps)}" style="width:${Math.round(tps*100)}%"></div></div>
           </div>
+          <button class="btn btn-danger btn-sm" onclick="deleteBundle('${esc(b.id)}', '${esc(b.name)}')">🗑 Supprimer</button>
         </div>
       </div>`;
   }
@@ -502,7 +654,7 @@
       freshness_score: parseFloat(document.getElementById('new-freshness').value) || 0.8,
     };
     try {
-      await apiFetch('/bundles/create', { method: 'POST', body: JSON.stringify(payload) });
+      await apiFetchAuth('/bundles/create', { method: 'POST', body: JSON.stringify(payload) });
       showToast(`✓ Bundle "${name}" créé avec succès !`);
       document.getElementById('new-id').value = '';
       document.getElementById('new-name').value = '';
