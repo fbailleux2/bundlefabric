@@ -481,7 +481,7 @@
       throw new Error(`Authentification échouée (${r.status}) — vérifiez votre clé API`);
     }
     const data = await r.json();
-    _cachedToken = data.access_token;
+    _cachedToken = data.access_token || data.token;
     _tokenExpiry = now + 23 * 3600 * 1000; // 23h cache
     return _cachedToken;
   }
