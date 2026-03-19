@@ -14,6 +14,7 @@ Public instance:  https://api.bundlefabric.org
 WebUI:            https://app.bundlefabric.org
 """
 
+import logging
 import os
 import sys
 import json
@@ -25,6 +26,12 @@ try:
 except ImportError:
     print("❌ 'requests' library not installed. Run: pip install requests")
     sys.exit(1)
+
+# ── Demo logger ───────────────────────────────────────────────────────────────
+# Separate from the server-side logging_config — the demo is a standalone script.
+# Run with --verbose / -v to enable DEBUG output.
+_log = logging.getLogger("bundlefabric.demo")
+_log.addHandler(logging.NullHandler())  # Silent unless configured by run_demo()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -45,6 +52,7 @@ class BundleFabricClient:
 
     def authenticate(self) -> str:
         """Exchange API key for a JWT bearer token."""
+        _log.debug("POST /auth/token")
         resp = self.session.post(
             f"{self.base_url}/auth/token",
             json={"api_key": self.api_key},
@@ -55,6 +63,7 @@ class BundleFabricClient:
         if not self._token:
             raise ValueError(f"No token in auth response: {data}")
         self.session.headers["Authorization"] = f"Bearer {self._token}"
+        _log.debug("JWT obtained — len=%d", len(self._token))
         return self._token
 
     # ── Health ────────────────────────────────────────────────────────────────
@@ -122,6 +131,18 @@ def step(n: int, total: int, title: str):
 
 
 def run_demo():
+    import argparse
+    parser = argparse.ArgumentParser(description="BundleFabric API demo")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable DEBUG logging")
+    args = parser.parse_args()
+
+    # Configure demo logger based on --verbose flag
+    log_level = logging.DEBUG if args.verbose else logging.WARNING
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s — %(message)s", datefmt="%H:%M:%S"))
+    _log.addHandler(handler)
+    _log.setLevel(log_level)
+
     api_key = os.environ.get("BF_API_KEY", "")
     api_url = os.environ.get("BF_API_URL", "https://api.bundlefabric.org")
 
@@ -131,6 +152,7 @@ def run_demo():
         sys.exit(1)
 
     client = BundleFabricClient(base_url=api_url, api_key=api_key)
+    _log.debug("Demo starting — api_url=%s", api_url)
 
     sep()
     print("\033[1mBundleFabric Python Client Demo\033[0m")

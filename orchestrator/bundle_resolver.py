@@ -1,15 +1,29 @@
-"""BundleFabric Orchestrator — Bundle resolver and scorer."""
+"""BundleFabric Orchestrator — Bundle resolver and scorer.
+
+Resolves natural language intent to the best-matching bundle using a
+composite scoring formula:
+    score = keyword_overlap × 0.5 + tps_score × 0.3 + recency × 0.2
+
+Where:
+  keyword_overlap — fraction of intent terms found in bundle metadata
+  tps_score       — Temporal Pertinence Score from the bundle manifest
+  recency         — 1.0 - (days_since_update / 365), capped at [0.1, 1.0]
+"""
 from __future__ import annotations
+
 import os
+import sys
 from datetime import datetime
 from typing import List, Optional
 
-import sys
 sys.path.insert(0, "/opt/bundlefabric")
 from models.bundle import BundleManifest
 from models.intent import Intent, BundleMatch
 from factory.loader import BundleLoader
 from factory.evaluator import BundleEvaluator
+from logging_config import get_logger
+
+logger = get_logger("orchestrator.resolver")
 
 BUNDLES_DIR = os.getenv("BUNDLES_DIR", "/opt/bundlefabric/bundles")
 
@@ -95,6 +109,13 @@ class BundleResolver:
                     explanation=f"Matched: {', '.join(matched_kws[:5]) or 'general'}",
                 ))
 
-        # Sort by score descending
+        # Sort by composite score descending, return top-K results
         matches.sort(key=lambda m: m.score, reverse=True)
-        return matches[:top_k]
+        top = matches[:top_k]
+        logger.debug(
+            "Resolved %d/%d bundle(s) — intent_domains=%s top=%s",
+            len(top), len(all_bundles),
+            intent.domains,
+            [m.bundle_id for m in top[:3]],
+        )
+        return top

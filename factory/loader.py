@@ -1,15 +1,26 @@
-"""BundleFabric Factory — Bundle YAML loader and registry."""
+"""BundleFabric Factory — Bundle YAML loader and registry.
+
+Responsibilities:
+  - Load / validate bundle manifests from YAML files on disk
+  - CRUD: create, update, delete bundles
+  - TPS maintenance: increment usage_count + recalculate usage_frequency
+"""
 from __future__ import annotations
+
+import math
 import os
 import shutil
-import math
+import sys
 from pathlib import Path
 from typing import List, Optional
+
 import yaml
 
-import sys
 sys.path.insert(0, "/opt/bundlefabric")
 from models.bundle import BundleManifest, TemporalScore, BundleStatus
+from logging_config import get_logger
+
+logger = get_logger("factory.loader")
 
 BUNDLES_DIR = Path(os.getenv("BUNDLES_DIR", "/opt/bundlefabric/bundles"))
 
@@ -34,16 +45,20 @@ class BundleLoader:
         with open(bundle_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
-        # Ensure temporal sub-dict is properly nested
+        # Ensure temporal sub-dict is present — older manifests may omit it
         if "temporal" not in data:
             data["temporal"] = {"freshness_score": 0.5}
+            logger.debug("Bundle '%s' missing temporal section — using defaults", bundle_id)
 
-        return BundleManifest(**data)
+        bundle = BundleManifest(**data)
+        logger.debug("Bundle loaded — id=%s tps=%.3f", bundle_id, bundle.temporal.tps_score)
+        return bundle
 
     def list_bundles(self) -> List[BundleManifest]:
         """List all valid bundles in the registry directory."""
         bundles: List[BundleManifest] = []
         if not self.bundles_dir.exists():
+            logger.warning("Bundles directory does not exist: %s", self.bundles_dir)
             return bundles
         for bundle_dir in sorted(self.bundles_dir.iterdir()):
             if bundle_dir.is_dir():
@@ -52,8 +67,9 @@ class BundleLoader:
                     bundles.append(bundle)
                 except BundleNotFoundError:
                     pass
-                except Exception as e:
-                    print(f"Warning: failed to load bundle {bundle_dir.name}: {e}")
+                except Exception as exc:
+                    logger.warning("Failed to load bundle '%s': %s", bundle_dir.name, exc)
+        logger.debug("Listed %d bundle(s) from %s", len(bundles), self.bundles_dir)
         return bundles
 
     def list_bundle_ids(self) -> List[str]:
@@ -84,8 +100,12 @@ class BundleLoader:
             data["temporal"] = temporal
             with open(bundle_path, "w", encoding="utf-8") as f:
                 yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
-        except Exception as e:
-            print(f"[Loader] increment_usage error for {bundle_id}: {e}")
+            logger.debug(
+                "Usage incremented — bundle=%s count=%d freq=%.4f",
+                bundle_id, count, temporal["usage_frequency"],
+            )
+        except Exception as exc:
+            logger.error("increment_usage failed for '%s': %s", bundle_id, exc)
 
     def update_bundle(self, bundle_id: str, updates: dict) -> BundleManifest:
         """Update allowed fields in manifest.yaml. Returns updated bundle."""
@@ -100,6 +120,7 @@ class BundleLoader:
                 data[k] = v
         with open(bundle_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+        logger.info("Bundle updated — id=%s fields=%s", bundle_id, list(updates.keys()))
         return self.load_bundle(bundle_id)
 
     def delete_bundle(self, bundle_id: str) -> None:
@@ -108,3 +129,4 @@ class BundleLoader:
         if not bundle_dir.exists():
             raise BundleNotFoundError(f"Bundle '{bundle_id}' not found")
         shutil.rmtree(bundle_dir)
+        logger.info("Bundle deleted — id=%s", bundle_id)

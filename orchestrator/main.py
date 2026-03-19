@@ -1,11 +1,21 @@
-"""BundleFabric Orchestrator — FastAPI main application."""
+"""BundleFabric Orchestrator — FastAPI main application.
+
+Entry point for the BundleFabric Cognitive OS API:
+  - Intent extraction (keyword → Ollama → Claude Haiku)
+  - Bundle resolution (RAG + TPS scoring)
+  - DeerFlow execution (LangGraph + Claude Haiku fallback)
+  - History persistence (SQLite via aiosqlite)
+  - Prometheus metrics, JWT auth, Phase 3 mesh/fusion/meta-agent routes
+"""
 from __future__ import annotations
+
 import asyncio
 import os
 import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, "/opt/bundlefabric")
 
@@ -25,6 +35,9 @@ from orchestrator.deerflow_client import DeerFlowClient
 from memory.rag_manager import RAGManager
 from memory.history_manager import init_db, record_execution, get_history, get_execution, search_history, get_bundle_stats
 from auth.jwt_auth import require_auth, require_admin, create_token, list_users, create_user, delete_user, rotate_jwt_secret
+from logging_config import get_logger, request_id_var
+
+logger = get_logger("orchestrator.main")
 
 
 # Prometheus metrics
@@ -49,13 +62,14 @@ _rag_total_count: int = 0
 
 
 async def _startup_index_bundles() -> None:
+    """Index all bundles into Qdrant at startup. Non-blocking — runs as a background task."""
     global _rag_indexed_count, _rag_total_count
-    await asyncio.sleep(2)
+    await asyncio.sleep(2)  # Brief delay so Qdrant has time to start
     try:
         bundles = loader.list_bundles()
         _rag_total_count = len(bundles)
         if not bundles:
-            print("[RAG] No bundles to index.")
+            logger.info("No bundles to index at startup")
             return
         rag.ensure_collection()
         indexed = 0
@@ -63,22 +77,23 @@ async def _startup_index_bundles() -> None:
             try:
                 if rag.index_bundle(bundle):
                     indexed += 1
-            except Exception as e:
-                print(f"[RAG] Failed to index {bundle.id}: {e}")
+            except Exception as exc:
+                logger.warning("Startup: failed to index bundle '%s': %s", bundle.id, exc)
         _rag_indexed_count = indexed
-        print(f"[RAG] Indexed {indexed}/{len(bundles)} bundles into Qdrant.")
-    except Exception as e:
-        print(f"[RAG] Startup indexing error (non-fatal): {e}")
+        logger.info("Startup RAG indexing complete — %d/%d bundles indexed", indexed, len(bundles))
+    except Exception as exc:
+        logger.warning("Startup RAG indexing error (non-fatal): %s", exc)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(_startup_index_bundles())
+    """FastAPI lifespan context: initialise DB + start background RAG indexing."""
+    logger.info("BundleFabric API v%s starting...", VERSION)
     await init_db()
-    print(f"[Startup] BundleFabric API v{VERSION} starting...")
+    task = asyncio.create_task(_startup_index_bundles())
     yield
     task.cancel()
-    print("[Shutdown] BundleFabric API stopped.")
+    logger.info("BundleFabric API stopped.")
 
 
 import auth.oauth_router as _oauth_router
@@ -114,6 +129,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Assign a short request-ID to every HTTP request.
+
+    The ID is propagated via ContextVar so all log lines emitted during the
+    request automatically include it, making cross-module tracing trivial.
+    Set X-Request-ID header on the request to force a specific ID (e.g. from
+    an upstream proxy or during tests).
+    """
+    req_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+    token = request_id_var.set(req_id)
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = req_id
+        return response
+    finally:
+        request_id_var.reset(token)
+
 
 app.include_router(_oauth_router.router)
 
@@ -301,7 +335,7 @@ async def mesh_request_bundle(bundle_id: str, req: MeshDownloadRequest, _auth=De
             bundle_path = pathlib.Path(bundles_dir) / bundle_id
             rag.index_bundle(bundle_path)
         except Exception as e:
-            print(f"[Mesh] Qdrant indexing failed for {bundle_id}: {e}")
+            logger.warning("Mesh: Qdrant indexing failed for '%s': %s", bundle_id, e)
         return {"status": "installed", "bundle_id": bundle_id, "peer_url": req.peer_url}
     raise HTTPException(status_code=422, detail=f"Failed to download or verify bundle '{bundle_id}'")
 
@@ -331,7 +365,7 @@ async def fuse_bundles(req: FuseRequest, _auth=Depends(require_admin)):
             import pathlib
             rag.index_bundle(pathlib.Path(result["path"]))
         except Exception as e:
-            print(f"[Fusion] Qdrant indexing failed: {e}")
+            logger.warning("Fusion: Qdrant indexing failed: %s", e)
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -365,7 +399,7 @@ async def meta_create_bundle(suggestion_id: str, _auth=Depends(require_admin)):
             import pathlib
             rag.index_bundle(pathlib.Path(bundles_dir) / result["bundle_id"])
         except Exception as e:
-            print(f"[MetaAgent] Qdrant indexing failed: {e}")
+            logger.warning("MetaAgent: Qdrant indexing failed: %s", e)
         return result
     except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -711,7 +745,7 @@ async def _index_single_bundle(bundle: BundleManifest) -> None:
             _rag_indexed_count += 1
             _rag_total_count += 1
     except Exception as e:
-        print(f"[RAG] Failed to index new bundle {bundle.id}: {e}")
+        logger.warning("RAG: failed to index new bundle '%s': %s", bundle.id, e)
 
 
 # ── Orchestration routes ──────────────────────────────────────────────────────

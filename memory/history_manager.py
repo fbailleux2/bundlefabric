@@ -1,10 +1,18 @@
 """BundleFabric — Execution history persistence (SQLite via aiosqlite)."""
 from __future__ import annotations
+
 import os
+import sys
 import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+
 import aiosqlite
+
+sys.path.insert(0, "/opt/bundlefabric")
+from logging_config import get_logger
+
+logger = get_logger("memory.history")
 
 HISTORY_DB = os.getenv("HISTORY_DB", "/app/data/history.db")
 MAX_OUTPUT_LEN = 2000
@@ -30,7 +38,7 @@ async def init_db() -> None:
             )
         """)
         await db.commit()
-    print(f"[History] DB initialized at {HISTORY_DB}")
+    logger.info("History DB initialised at %s", HISTORY_DB)
 
 
 async def record_execution(

@@ -1,20 +1,31 @@
 """BundleFabric Orchestrator — Intent extraction engine.
 
-Dual-mode: keyword-based (instant, always works) + Ollama async enrichment (optional).
-Claude Haiku enrichment available ONLY via Tailscale (X-Tailscale-Access: 1).
+Three-tier extraction pipeline (each tier improves on the previous):
+  1. Keyword extraction  — instant (~0ms), always works, no external deps
+  2. Ollama enrichment   — async, best-effort (~7-15s on CPU), higher confidence
+  3. Claude Haiku        — Tailscale-only, ~300ms, confidence 0.95
+
+The pipeline degrades gracefully: if Ollama times out, keyword result is used.
+If Claude is unavailable, Ollama result (or keyword) is used.
 """
 from __future__ import annotations
-import os
-import re
-import json
+
 import asyncio
+import json
+import os
 import pathlib
+import re
+import sys
+import time
 from typing import Optional, AsyncGenerator
+
 import httpx
 
-import sys
 sys.path.insert(0, "/opt/bundlefabric")
 from models.intent import Intent
+from logging_config import get_logger
+
+logger = get_logger("orchestrator.intent")
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:18630")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "nemotron-mini:4b")
@@ -53,22 +64,22 @@ _claude_available: bool = False
 
 
 def _load_anthropic_key() -> None:
-    """Load Anthropic API key from file at module init. Never logs the key."""
+    """Load Anthropic API key from file at module init. The key itself is never logged."""
     global _anthropic_api_key, _claude_available
     try:
         key_path = pathlib.Path(ANTHROPIC_KEY_FILE)
         if not key_path.exists():
-            print(f"[Claude] WARNING: Key file not found at {ANTHROPIC_KEY_FILE} — claude_available=False")
+            logger.warning("Anthropic key file not found at %s — claude_available=False", ANTHROPIC_KEY_FILE)
             return
         key = key_path.read_text().strip()
         if not key or key == "PLACE_YOUR_ANTHROPIC_API_KEY_HERE" or len(key) < 20:
-            print(f"[Claude] WARNING: Key file contains placeholder/empty value — claude_available=False")
+            logger.warning("Anthropic key file contains placeholder/empty value — claude_available=False")
             return
         _anthropic_api_key = key
         _claude_available = True
-        print(f"[Claude] API key loaded from {ANTHROPIC_KEY_FILE} (len={len(key)}) — claude_available=True")
+        logger.info("Anthropic API key loaded (len=%d) — claude_available=True", len(key))
     except Exception as e:
-        print(f"[Claude] WARNING: Failed to load key: {e} — claude_available=False")
+        logger.warning("Failed to load Anthropic key: %s — claude_available=False", e)
 
 
 _load_anthropic_key()
@@ -115,10 +126,42 @@ def extract_fast(text: str) -> Intent:
     )
 
 
+# ── Shared JSON helper ────────────────────────────────────────────────────────
+
+def _parse_intent_from_json(
+    raw: str,
+    base_intent: Intent,
+    method: str,
+    confidence: float,
+) -> Optional[Intent]:
+    """Parse an LLM JSON response into an Intent object.
+
+    Both Ollama and Claude return the same JSON schema — this helper avoids
+    duplicating the regex+parse logic in each enrichment function.
+    Returns None if the JSON cannot be parsed (caller falls back to base_intent).
+    """
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group())
+        return Intent(
+            raw_text=base_intent.raw_text,
+            goal=parsed.get("goal", base_intent.goal),
+            domains=parsed.get("domains", base_intent.domains),
+            keywords=parsed.get("keywords", base_intent.keywords),
+            complexity=parsed.get("complexity", base_intent.complexity),
+            extraction_method=method,
+            confidence=confidence,
+        )
+    except json.JSONDecodeError:
+        return None
+
+
 # ── Ollama enrichment ────────────────────────────────────────────────────────
 
 async def enrich_with_ollama(intent: Intent) -> Intent:
-    """Async Ollama enrichment — best-effort, falls back to original intent on failure."""
+    """Async Ollama enrichment — best-effort, falls back to keyword intent on failure."""
     prompt = f"""Analyze this task request and extract structured information.
 
 Request: "{intent.raw_text}"
@@ -131,6 +174,7 @@ Respond with ONLY this JSON (no markdown, no explanation):
   "complexity": "simple|medium|complex"
 }}"""
 
+    t0 = time.time()
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             resp = await client.post(
@@ -143,23 +187,17 @@ Respond with ONLY this JSON (no markdown, no explanation):
                 },
             )
             resp.raise_for_status()
-            data = resp.json()
-            raw = data.get("response", "").strip()
+            raw = resp.json().get("response", "").strip()
+            elapsed = time.time() - t0
 
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if match:
-                parsed = json.loads(match.group())
-                return Intent(
-                    raw_text=intent.raw_text,
-                    goal=parsed.get("goal", intent.goal),
-                    domains=parsed.get("domains", intent.domains),
-                    keywords=parsed.get("keywords", intent.keywords),
-                    complexity=parsed.get("complexity", intent.complexity),
-                    extraction_method="ollama",
-                    confidence=0.9,
-                )
-    except Exception:
-        pass  # Graceful fallback to keyword-based intent
+            enriched = _parse_intent_from_json(raw, intent, method="ollama", confidence=0.9)
+            if enriched:
+                logger.debug("Ollama enrichment in %.1fs — method=ollama confidence=0.90", elapsed)
+                return enriched
+            logger.debug("Ollama response unparseable (%.1fs) — keeping keyword intent", elapsed)
+    except Exception as e:
+        logger.debug("Ollama enrichment failed after %.1fs: %s", time.time() - t0, e)
+        # Graceful fallback to keyword-based intent
 
     return intent
 
@@ -167,11 +205,10 @@ Respond with ONLY this JSON (no markdown, no explanation):
 # ── Claude Haiku enrichment (Tailscale-only) ─────────────────────────────────
 
 async def enrich_with_claude_haiku(intent: Intent) -> Intent:
-    """
-    Claude Haiku enrichment — superior quality, ~300ms, confidence 0.95.
-    Tailscale-only: caller must have verified X-Tailscale-Access: 1.
-    Uses direct httpx POST to Anthropic REST API (no SDK, async-compatible).
-    Key never logged — read once at module init from secrets_vault.
+    """Claude Haiku enrichment — ~300ms, confidence 0.95, Tailscale-only.
+
+    Uses the Anthropic REST API directly (no SDK — stays async-compatible).
+    The API key is never logged; it is read once at module init.
     """
     if not _claude_available or not _anthropic_api_key:
         return intent
@@ -188,6 +225,7 @@ Respond with ONLY this JSON (no markdown, no explanation):
   "complexity": "simple|medium|complex"
 }}"""
 
+    t0 = time.time()
     try:
         async with httpx.AsyncClient(timeout=CLAUDE_TIMEOUT) as client:
             resp = await client.post(
@@ -204,23 +242,17 @@ Respond with ONLY this JSON (no markdown, no explanation):
                 },
             )
             resp.raise_for_status()
-            data = resp.json()
-            raw = data["content"][0]["text"].strip()
+            raw = resp.json()["content"][0]["text"].strip()
+            elapsed = time.time() - t0
 
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if match:
-                parsed = json.loads(match.group())
-                return Intent(
-                    raw_text=intent.raw_text,
-                    goal=parsed.get("goal", intent.goal),
-                    domains=parsed.get("domains", intent.domains),
-                    keywords=parsed.get("keywords", intent.keywords),
-                    complexity=parsed.get("complexity", intent.complexity),
-                    extraction_method="claude",
-                    confidence=0.95,
-                )
-    except Exception:
-        pass  # Graceful fallback — key never exposed in logs
+            enriched = _parse_intent_from_json(raw, intent, method="claude", confidence=0.95)
+            if enriched:
+                logger.debug("Claude Haiku enrichment in %.1fs — confidence=0.95", elapsed)
+                return enriched
+            logger.debug("Claude response unparseable (%.1fs) — keeping prior intent", elapsed)
+    except Exception as e:
+        # Key must never appear in logs — log the error type only
+        logger.debug("Claude enrichment failed after %.1fs: %s", time.time() - t0, type(e).__name__)
 
     return intent
 
@@ -308,32 +340,41 @@ async def claude_execute_stream(
 # ── Full extraction pipeline ─────────────────────────────────────────────────
 
 async def extract(text: str, use_ollama: bool = True, use_claude: bool = False) -> Intent:
+    """Full extraction pipeline — runs tiers in sequence, each upgrading the result.
+
+    Tier 1 (always): keyword extraction — instant, deterministic, no deps
+    Tier 2 (opt-in): Ollama enrichment — async, best-effort, OLLAMA_TIMEOUT cap
+    Tier 3 (opt-in): Claude Haiku — Tailscale-only, highest quality
     """
-    Full extraction pipeline:
-    1. Always run keyword extraction (instant)
-    2. Optionally enrich with Ollama async (best-effort, timeout)
-    3. Optionally enrich with Claude Haiku (Tailscale-only, ~300ms)
-    """
+    t0 = time.time()
     intent = extract_fast(text)
+    logger.debug(
+        "Keyword extraction — method=%s domains=%s confidence=%.2f",
+        intent.extraction_method, intent.domains, intent.confidence,
+    )
 
     if use_ollama:
         try:
             intent = await asyncio.wait_for(
                 enrich_with_ollama(intent),
-                timeout=OLLAMA_TIMEOUT + 2
+                timeout=OLLAMA_TIMEOUT + 2,
             )
         except asyncio.TimeoutError:
-            pass  # Return keyword-based intent on timeout
+            logger.warning("Ollama enrichment timed out after %.0fs — using keyword intent", OLLAMA_TIMEOUT)
 
     if use_claude and _claude_available:
         try:
             intent = await asyncio.wait_for(
                 enrich_with_claude_haiku(intent),
-                timeout=CLAUDE_TIMEOUT + 2
+                timeout=CLAUDE_TIMEOUT + 2,
             )
         except asyncio.TimeoutError:
-            pass  # Fallback to previous intent on timeout
+            logger.warning("Claude enrichment timed out after %.0fs — using prior intent", CLAUDE_TIMEOUT)
 
+    logger.info(
+        "Intent extracted in %.1fs — method=%s domains=%s confidence=%.2f",
+        time.time() - t0, intent.extraction_method, intent.domains, intent.confidence,
+    )
     return intent
 
 

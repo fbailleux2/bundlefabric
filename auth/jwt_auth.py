@@ -12,6 +12,9 @@ import hmac
 import hashlib
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from logging_config import get_logger
+
+logger = get_logger("auth")
 
 # Path to optional jwt_secret.txt override
 _JWT_SECRET_FILE = pathlib.Path(os.getenv("USERS_FILE", "/app/secrets_vault/users.json")).parent / "jwt_secret.txt"
@@ -22,7 +25,7 @@ def _load_jwt_secret() -> str:
     if _JWT_SECRET_FILE.exists():
         s = _JWT_SECRET_FILE.read_text().strip()
         if s:
-            print(f"[Auth] JWT secret loaded from {_JWT_SECRET_FILE}")
+            logger.info("JWT secret loaded from %s", _JWT_SECRET_FILE)
             return s
     return os.getenv("JWT_SECRET", "change_me_in_production")
 
@@ -47,11 +50,11 @@ def _load_users() -> None:
             data = json.loads(p.read_text())
             _users = {u["api_key"]: {"username": u["username"], "role": u.get("role", "user")}
                       for u in data if "api_key" in u and "username" in u}
-            print(f"[Auth] Loaded {len(_users)} user(s) from {USERS_FILE}")
+            logger.info("Loaded %d user(s) from %s", len(_users), USERS_FILE)
         else:
-            print(f"[Auth] WARNING: users file not found at {USERS_FILE} — auth disabled")
+            logger.warning("Users file not found at %s — auth disabled", USERS_FILE)
     except Exception as e:
-        print(f"[Auth] WARNING: failed to load users: {e}")
+        logger.warning("Failed to load users: %s", e)
 
 
 _load_users()
@@ -122,7 +125,7 @@ def rotate_jwt_secret() -> str:
     new_secret = secrets.token_hex(32)
     _JWT_SECRET_FILE.write_text(new_secret)
     JWT_SECRET = new_secret
-    print(f"[Auth] JWT secret rotated — all existing tokens invalidated")
+    logger.warning("JWT secret rotated — all existing tokens invalidated")
     return new_secret
 
 
@@ -182,7 +185,7 @@ def create_oauth_user(github_login: str) -> Dict[str, Any]:
     data.append(user)
     save_users(data)
     reload_users()
-    print(f"[Auth] Auto-provisioned OAuth user: {github_login}")
+    logger.info("Auto-provisioned OAuth user: %s", github_login)
     return user
 
 

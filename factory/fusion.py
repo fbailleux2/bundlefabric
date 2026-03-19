@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sys
+sys.path.insert(0, "/opt/bundlefabric")
+from logging_config import get_logger
+
+logger = get_logger("factory.fusion")
 import secrets
 import time
 from typing import Any, Dict, List
@@ -111,7 +116,7 @@ class BundleFusion:
         )
         (fusion_dir / "prompts" / "system.md").write_text(merged_system)
 
-        print(f"[Fusion] Created {fusion_id} from {unique_ids}")
+        logger.info("Fusion bundle created — id=%s sources=%s", fusion_id, unique_ids)
         return {
             "id": fusion_id,
             "path": str(fusion_dir),

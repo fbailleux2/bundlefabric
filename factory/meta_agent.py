@@ -4,9 +4,15 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import sys
 import time
 import uuid
 from typing import Any, Dict, List, Optional
+
+sys.path.insert(0, "/opt/bundlefabric")
+from logging_config import get_logger
+
+logger = get_logger("factory.meta_agent")
 
 import httpx
 import yaml
@@ -77,7 +83,7 @@ class MetaAgent:
                         rows = await cursor2.fetchall()
 
         except Exception as e:
-            print(f"[MetaAgent] History analysis failed: {e}")
+            logger.warning("MetaAgent history analysis failed: %s", e)
             return []
 
         patterns = []
@@ -88,7 +94,7 @@ class MetaAgent:
                 "examples": [intent_text],
             })
 
-        print(f"[MetaAgent] Found {len(patterns)} usage patterns")
+        logger.info("MetaAgent found %d usage pattern(s)", len(patterns))
         return patterns
 
     # ── Suggestion generation ─────────────────────────────────────────────────
@@ -97,7 +103,7 @@ class MetaAgent:
         """Call Claude Haiku to generate a bundle manifest for the given pattern."""
         api_key = _get_api_key()
         if not api_key:
-            print("[MetaAgent] No Claude API key available")
+            logger.warning("MetaAgent: no Claude API key available — cannot suggest bundle")
             return None
 
         prompt = f"""Tu es un expert en conception de bundles BundleFabric.
@@ -136,7 +142,7 @@ meta:
                     },
                 )
                 if resp.status_code != 200:
-                    print(f"[MetaAgent] Claude error: {resp.status_code}")
+                    logger.warning("MetaAgent: Claude API error %d", resp.status_code)
                     return None
 
                 content = resp.json()["content"][0]["text"].strip()
@@ -147,7 +153,7 @@ meta:
 
                 manifest = yaml.safe_load(content)
                 if not isinstance(manifest, dict) or "id" not in manifest:
-                    print(f"[MetaAgent] Invalid manifest from Claude: {content[:100]}")
+                    logger.warning("MetaAgent: invalid manifest from Claude: %s", content[:100])
                     return None
 
                 suggestion_id = str(uuid.uuid4())[:8]
@@ -164,7 +170,7 @@ meta:
                     "status": "pending",
                 }
         except Exception as e:
-            print(f"[MetaAgent] Suggestion failed: {e}")
+            logger.warning("MetaAgent suggestion failed: %s", e)
             return None
 
     # ── Suggestion CRUD ───────────────────────────────────────────────────────

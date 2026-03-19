@@ -1,27 +1,36 @@
-"""BundleFabric Orchestrator — DeerFlow LangGraph client (real integration).
+"""BundleFabric Orchestrator — DeerFlow LangGraph client.
 
 Architecture:
-  - deer-flow-gateway:8001  → FastAPI gateway (models, skills, memory — no chat)
-  - deer-flow-langgraph:2024 → LangGraph server (threads + runs SSE streaming)
+  - deer-flow-gateway:8001    → FastAPI gateway (models, skills, memory)
+  - deer-flow-langgraph:2024  → LangGraph server (threads + runs SSE streaming)
 
-Flow:
-  1. POST /threads           → create ephemeral thread
-  2. POST /threads/{id}/runs/stream → stream SSE events
-  3. Parse event: messages → token-by-token chunks
-  4. Fallback: Claude Haiku if LangGraph timeout or unavailable
+Execution flow:
+  1. POST /threads                        → create an ephemeral thread
+  2. POST /threads/{id}/runs/stream       → stream SSE events
+  3. Parse SSE events: messages → token chunks
+  4. Fallback: Claude Haiku if LangGraph times out or is unavailable
+
+Performance note: on a CPU-only Haswell server with Ollama qwen2.5:1.5b,
+first-token latency is typically 60-120s. LANGGRAPH_FIRST_TOKEN_TIMEOUT
+controls when we give up and trigger the Claude Haiku fallback.
 """
 from __future__ import annotations
-import os
-import json
+
 import asyncio
+import json
+import os
+import sys
 import uuid
-from typing import Optional, Dict, Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Dict, Optional
+
 import httpx
 
-import sys
 sys.path.insert(0, "/opt/bundlefabric")
-from models.intent import Intent, ExecutionResult
 from models.bundle import BundleManifest
+from models.intent import Intent, ExecutionResult
+from logging_config import get_logger
+
+logger = get_logger("orchestrator.deerflow")
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 DEERFLOW_URL = os.getenv("DEERFLOW_URL", "http://deer-flow-gateway:8001")
@@ -179,13 +188,15 @@ class DeerFlowClient:
     # ── Thread management ─────────────────────────────────────────────────────
 
     async def _create_thread(self, client: httpx.AsyncClient, bundle_id: str) -> str:
-        """Create a LangGraph thread. Returns thread_id."""
+        """Create a LangGraph thread. Returns the thread_id UUID."""
         resp = await client.post(
             f"{self.langgraph_url}/threads",
             json={"metadata": {"source": "bundlefabric", "bundle_id": bundle_id}},
         )
         resp.raise_for_status()
-        return resp.json()["thread_id"]
+        thread_id = resp.json()["thread_id"]
+        logger.debug("LangGraph thread created — id=%s bundle=%s", thread_id[:8], bundle_id)
+        return thread_id
 
     # ── Execute (non-streaming) ───────────────────────────────────────────────
 
@@ -283,16 +294,22 @@ class DeerFlowClient:
                     )
 
         except httpx.TimeoutException:
+            logger.warning(
+                "LangGraph timeout after %.0fs — bundle=%s (Ollama CPU inference is slow)",
+                DEERFLOW_TIMEOUT, bundle_id,
+            )
             return ExecutionResult(
                 status="timeout", bundle_id=bundle_id, intent_goal=intent.goal, output="",
                 error_message=f"LangGraph timed out after {DEERFLOW_TIMEOUT}s (Ollama CPU inference is slow)",
             )
         except httpx.ConnectError:
+            logger.warning("LangGraph unreachable — url=%s bundle=%s", self.langgraph_url, bundle_id)
             return ExecutionResult(
                 status="error", bundle_id=bundle_id, intent_goal=intent.goal, output="",
                 error_message=f"Cannot connect to LangGraph at {self.langgraph_url}",
             )
         except Exception as e:
+            logger.error("DeerFlow execute_bundle error — bundle=%s: %s", bundle_id, e)
             return ExecutionResult(
                 status="error", bundle_id=bundle_id, intent_goal=intent.goal, output="",
                 error_message=str(e),
@@ -409,12 +426,18 @@ class DeerFlowClient:
                                 return
 
         except httpx.TimeoutException:
+            logger.warning(
+                "LangGraph stream timeout after %.0fs — bundle=%s (Ollama CPU slow)",
+                DEERFLOW_TIMEOUT, bundle_id,
+            )
             yield f"event: error\ndata: {json.dumps({'message': f'LangGraph timeout après {DEERFLOW_TIMEOUT}s — Ollama CPU lent'})}\n\n"
             return
         except httpx.ConnectError:
+            logger.warning("LangGraph stream connect error — url=%s", self.langgraph_url)
             yield f"event: error\ndata: {json.dumps({'message': f'Connexion LangGraph impossible: {self.langgraph_url}'})}\n\n"
             return
         except Exception as e:
+            logger.error("DeerFlow stream unexpected error — bundle=%s: %s", bundle_id, e)
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
             return
 
