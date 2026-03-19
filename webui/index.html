@@ -304,6 +304,10 @@
     initTabs();
     checkApiStatus();
     setInterval(checkApiStatus, 30000);
+    // Show API key banner automatically if no key configured
+    if (!localStorage.getItem('bf_api_key')) {
+      document.getElementById('apikey-banner').style.display = 'flex';
+    }
   });
 
   function initTabs() {
