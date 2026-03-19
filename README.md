@@ -16,6 +16,32 @@ Intent (natural language)
     → Result (streamed SSE)
 ```
 
+## Demo
+
+Try the public instance in 30 seconds:
+
+```bash
+# Health check — no auth required
+curl https://api.bundlefabric.org/health
+
+# Authenticate and resolve an intent
+export BF_API_KEY="your_api_key"
+TOKEN=$(curl -s -X POST https://api.bundlefabric.org/auth/token \
+  -H "Content-Type: application/json" \
+  -d "{\"api_key\":\"$BF_API_KEY\"}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token') or d.get('access_token',''))")
+
+curl -s -X POST https://api.bundlefabric.org/resolve \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"How do I check nginx error logs?"}' | python3 -m json.tool
+```
+
+→ **Full bilingual walkthrough (FR/EN):** [DEMO.md](./DEMO.md)
+→ **WebUI:** [app.bundlefabric.org](https://app.bundlefabric.org)
+→ **Demo scripts:** [`demo/demo.sh`](./demo/demo.sh) · [`demo/demo_client.py`](./demo/demo_client.py)
+
+---
+
 ## Features
 
 - **Intent extraction** — keyword (instant) + Ollama enrichment (async) + Claude Haiku (Tailscale-only)
